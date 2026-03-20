@@ -100,7 +100,50 @@
 - **可拖拽侧边栏** — 180px ~ 500px 范围内自由调整，宽度自动记忆
 - **Scroll FAB** — 长对话中快速滚动到顶部/底部的浮动按钮
 
-## 快速开始
+## 安装与使用
+
+### 方式一：npx 一行启动（推荐）
+
+```bash
+npx cli-history-hub open
+```
+
+无需安装，自动启动服务并打开浏览器。
+
+### 方式二：全局安装
+
+```bash
+npm install -g cli-history-hub
+
+# 启动并打开浏览器
+cli-history-hub open
+
+# 或后台启动
+cli-history-hub start
+
+# 查看状态
+cli-history-hub status
+
+# 停止服务
+cli-history-hub stop
+```
+
+### 方式三：下载独立二进制
+
+从 [Releases](https://github.com/nameIsNoPublic/cli-history-hub/releases) 下载对应平台的可执行文件，无需 Node.js 环境：
+
+- `cli-history-hub-macos-arm64` — macOS Apple Silicon
+- `cli-history-hub-macos-x64` — macOS Intel
+- `cli-history-hub-linux-x64` — Linux x64
+- `cli-history-hub-win-x64.exe` — Windows x64
+
+```bash
+# macOS / Linux
+chmod +x cli-history-hub-macos-arm64
+./cli-history-hub-macos-arm64 open
+```
+
+### 方式四：从源码运行
 
 ```bash
 git clone https://github.com/nameIsNoPublic/cli-history-hub.git
@@ -109,7 +152,16 @@ npm install
 node server.js
 ```
 
-浏览器打开 http://localhost:3456
+### CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `cli-history-hub open` | 启动服务并打开浏览器 |
+| `cli-history-hub start` | 后台启动服务 |
+| `cli-history-hub stop` | 停止后台服务 |
+| `cli-history-hub status` | 查看运行状态 |
+| `cli-history-hub` | 前台启动（Ctrl+C 停止） |
+| `cli-history-hub --port 8080` | 指定端口 |
 
 > 确保 `~/.claude/projects/` 或 `~/.codex/sessions/` 中有会话数据。如果两个目录都不存在，页面将显示空列表。
 

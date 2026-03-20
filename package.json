@@ -1,12 +1,55 @@
 {
   "name": "cli-history-hub",
   "version": "1.0.0",
-  "description": "Browse and manage conversation history from Claude Code CLI and Codex CLI",
+  "description": "Browse and manage conversation history from Claude Code CLI and OpenAI Codex CLI",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
+  "bin": {
+    "cli-history-hub": "./bin/cli.js"
   },
+  "files": [
+    "bin/",
+    "public/",
+    "server.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "build": "pkg . --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64,node18-win-x64 --output dist/cli-history-hub"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*"
+    ]
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "openai",
+    "anthropic",
+    "ai",
+    "coding-assistant",
+    "history",
+    "conversation",
+    "viewer",
+    "cli",
+    "prompt-library",
+    "diff-viewer"
+  ],
+  "author": "",
+  "license": "CC-BY-NC-SA-4.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nameIsNoPublic/cli-history-hub.git"
+  },
+  "homepage": "https://github.com/nameIsNoPublic/cli-history-hub",
   "dependencies": {
     "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
