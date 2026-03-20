@@ -4,8 +4,9 @@
 
 当前支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 和 [OpenAI Codex CLI](https://github.com/openai/codex)，直接读取本地 JSONL 会话文件，提供可视化界面，无需数据库，零配置启动。
 
+[![npm version](https://img.shields.io/npm/v/cli-history-hub?color=cb3837&logo=npm)](https://www.npmjs.com/package/cli-history-hub)
+[![downloads](https://img.shields.io/npm/dm/cli-history-hub?color=cb3837&logo=npm)](https://www.npmjs.com/package/cli-history-hub)
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
-![Express](https://img.shields.io/badge/Express-4.x-000000?logo=express&logoColor=white)
 ![License](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey?logo=creativecommons)
 
 ## 功能
