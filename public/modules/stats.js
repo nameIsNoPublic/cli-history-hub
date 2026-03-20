@@ -507,7 +507,8 @@ window.Stats = (function () {
       ctx.globalAlpha = isFaded ? 0.2 : 1.0;
       ctx.fill();
 
-      ctx.strokeStyle = '#0d1117';
+      var theme = document.documentElement.getAttribute('data-theme');
+      ctx.strokeStyle = theme === 'light' ? '#ffffff' : '#0d1117';
       ctx.lineWidth = 2;
       ctx.stroke();
 
@@ -671,5 +672,6 @@ window.Stats = (function () {
   return {
     init: init,
     show: show,
+    redrawChart: drawDoughnutCanvas,
   };
 })();

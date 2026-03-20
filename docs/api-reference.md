@@ -296,6 +296,14 @@ CLI History Hub 后端提供 9 个 RESTful API 端点，全部定义在 `server.
 - usage 各字段累加
 - 取最后一个的 model
 
+### Codex 会话
+
+当 `pid` 以 `codex:` 开头时，返回格式不同：
+- `source: "codex"` 标识数据源
+- `rawEvents` 替代 `messages`，包含原始 Codex 事件
+- `customName`/`tags`/`isFavorite` 从 `~/.codex/sessions/session-meta/` 的 sidecar 读取
+- 不支持分页（固定 `page: 1, totalPages: 1`）
+
 ### 涉及代码
 
 | 文件 | 函数/行号 |
@@ -348,15 +356,16 @@ CLI History Hub 后端提供 9 个 RESTful API 端点，全部定义在 `server.
 
 - 只更新请求体中提供的字段，不影响其他字段
 - 写入后自动删除该会话的缓存条目（`sessionCache.delete`）
-- sidecar 文件路径：`~/.claude/projects/{pid}/session-meta/{sid}.json`
+- **Claude 会话**：sidecar 文件路径 `~/.claude/projects/{pid}/session-meta/{sid}.json`
+- **Codex 会话**（`pid` 以 `codex:` 开头）：sidecar 文件路径 `~/.codex/sessions/session-meta/{sid}.json`
 - 如果 `session-meta` 目录不存在会自动创建
 
 ### 涉及代码
 
 | 文件 | 函数/行号 |
 |------|----------|
-| server.js:462-488 | `PUT /api/projects/:pid/sessions/:sid/meta` 路由 |
-| server.js:43-51 | `readSidecarMeta()` |
+| server.js | `PUT /api/projects/:pid/sessions/:sid/meta` 路由（通过 `isCodexProject()` 分支处理 Claude/Codex） |
+| server.js:47-57 | `readSidecarMeta()` |
 | server.js:56-63 | `writeSidecarMeta()` |
 
 ---

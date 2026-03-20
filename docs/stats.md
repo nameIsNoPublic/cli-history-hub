@@ -97,6 +97,7 @@
 | 前端 | public/modules/stats.js:272-282 | `niceRoundUp()` - Y 轴刻度算法 |
 | 前端 | public/modules/stats.js:288-341 | `renderBreakdown()` - 分类表格 |
 | 前端 | public/modules/stats.js:383-393 | `formatShortNumber()` - K/M 格式化 |
+| 前端 | public/modules/stats.js | `redrawChart()` - 暴露给主题切换用的 Canvas 重绘方法 |
 | 后端 | server.js | `GET /api/stats` |
 
 ## API 接口

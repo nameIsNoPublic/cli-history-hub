@@ -33,6 +33,8 @@
 
 **命名优先级：** sidecar 的 `customName` > JSONL 中的 rename 记录 > firstPrompt > "Untitled"
 
+**数据源支持：** Claude Code 和 Codex CLI 会话均支持重命名/收藏/标签。Claude 的 sidecar 存储在 `~/.claude/projects/{pid}/session-meta/`，Codex 的 sidecar 存储在 `~/.codex/sessions/session-meta/`。
+
 ### 收藏/置顶
 
 一键收藏会话，收藏的会话在列表中置顶显示。
@@ -83,9 +85,9 @@
 | 前端 | public/modules/features.js:479-527 | 收藏：`toggleFavorite()`, `updateFavoriteButton()` |
 | 前端 | public/modules/features.js:533-601 | 通用：`closeModal()`, `showToast()`, `apiPut()` |
 | 前端 | public/app.js:665-674 | `updateFavoriteButton()` (App 侧的外观更新) |
-| 后端 | server.js:462-488 | `PUT /api/projects/:pid/sessions/:sid/meta` |
-| 后端 | server.js:738-768 | `GET /api/tags` |
-| 后端 | server.js:43-63 | `readSidecarMeta()`, `writeSidecarMeta()` |
+| 后端 | server.js | `PUT /api/projects/:pid/sessions/:sid/meta`（支持 Claude 和 Codex 会话） |
+| 后端 | server.js | `GET /api/tags` |
+| 后端 | server.js:47-70 | `readSidecarMeta()`, `writeSidecarMeta()` |
 
 ## API 接口
 

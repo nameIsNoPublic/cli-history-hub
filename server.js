@@ -550,8 +550,13 @@ function readCodexSessionHead(filePath) {
   }
 
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const lines = content.split('\n');
+    // Read in chunks (up to 256KB) instead of the entire file
+    const CHUNK_SIZE = 262144;
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(Math.min(CHUNK_SIZE, stat.size));
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf-8', 0, bytesRead).split('\n');
 
     let cwd = null;
     let model = null;
@@ -662,8 +667,12 @@ function extractCodexSessionMeta(filePath, sessionId, displayName) {
   let stat;
   try { stat = fs.statSync(filePath); } catch { return null; }
 
+  const sidecarPath = path.join(CODEX_SESSIONS_DIR, 'session-meta', `${sessionId}.json`);
+  let sidecarMtime = 0;
+  try { sidecarMtime = fs.statSync(sidecarPath).mtimeMs; } catch { /* no sidecar */ }
+
   const cached = sessionCache.get(cacheKey);
-  if (cached && cached.mtime === stat.mtimeMs) {
+  if (cached && cached.mtime === stat.mtimeMs && cached.sidecarMtime === sidecarMtime) {
     return cached.data;
   }
 
@@ -719,23 +728,24 @@ function extractCodexSessionMeta(filePath, sessionId, displayName) {
     if (!created) created = stat.birthtime.toISOString();
     if (!modified) modified = stat.mtime.toISOString();
 
+    const sidecar = readSidecarMeta(CODEX_SESSIONS_DIR, sessionId);
     const meta = {
       sessionId,
       firstPrompt: firstPrompt || 'No prompt',
-      customName: null,
-      displayName: displayName || (firstPrompt ? firstPrompt.substring(0, 100) : 'Untitled'),
+      customName: sidecar.customName || null,
+      displayName: sidecar.customName || displayName || (firstPrompt ? firstPrompt.substring(0, 100) : 'Untitled'),
       messageCount,
       created,
       modified,
       gitBranch: null,
       projectPath: null,
-      tags: [],
-      isFavorite: false,
+      tags: sidecar.tags || [],
+      isFavorite: sidecar.isFavorite || false,
       source: 'codex',
       model,
     };
 
-    sessionCache.set(cacheKey, { mtime: stat.mtimeMs, sidecarMtime: 0, data: meta });
+    sessionCache.set(cacheKey, { mtime: stat.mtimeMs, sidecarMtime, data: meta });
     return meta;
   } catch {
     return null;
@@ -906,13 +916,14 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
       // Transparent passthrough — no format conversion
       const { source, sessionMeta, rawEvents } = parseCodexMessages(codexFile);
 
+      const sidecar = readSidecarMeta(CODEX_SESSIONS_DIR, sid);
       return res.json({
         source,
         sessionMeta,
         rawEvents,
-        customName: null,
-        tags: [],
-        isFavorite: false,
+        customName: sidecar.customName || null,
+        tags: sidecar.tags || [],
+        isFavorite: sidecar.isFavorite || false,
         totalMessages: rawEvents.filter(e => e.type === 'event_msg' && e.payload && (e.payload.type === 'user_message' || e.payload.type === 'agent_message')).length,
         page: 1,
         totalPages: 1,
@@ -988,24 +999,39 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
 // ---------------------------------------------------------------------------
 app.put('/api/projects/:pid/sessions/:sid/meta', (req, res) => {
   try {
-    const projectDir = path.join(PROJECTS_DIR, req.params.pid);
-    const jsonlPath = path.join(projectDir, `${req.params.sid}.jsonl`);
-    if (!fs.existsSync(jsonlPath)) {
-      return res.status(404).json({ error: 'Session not found' });
+    const pid = req.params.pid;
+    const sid = req.params.sid;
+    let sidecarDir;
+    let cacheKey;
+
+    if (isCodexProject(pid)) {
+      const codexFile = findCodexSessionFile(sid);
+      if (!codexFile) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      sidecarDir = CODEX_SESSIONS_DIR;
+      cacheKey = 'codex:' + codexFile;
+    } else {
+      const projectDir = path.join(PROJECTS_DIR, pid);
+      const jsonlPath = path.join(projectDir, `${sid}.jsonl`);
+      if (!fs.existsSync(jsonlPath)) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      sidecarDir = projectDir;
+      cacheKey = jsonlPath;
     }
 
     const { customName, tags, isFavorite } = req.body;
-    const existing = readSidecarMeta(projectDir, req.params.sid);
+    const existing = readSidecarMeta(sidecarDir, sid);
 
     if (customName !== undefined) existing.customName = customName;
     if (tags !== undefined) existing.tags = tags;
     if (isFavorite !== undefined) existing.isFavorite = isFavorite;
     existing.updatedAt = new Date().toISOString();
 
-    writeSidecarMeta(projectDir, req.params.sid, existing);
+    writeSidecarMeta(sidecarDir, sid, existing);
 
     // Invalidate cache for this session
-    const cacheKey = jsonlPath;
     sessionCache.delete(cacheKey);
 
     res.json({ ok: true, meta: existing });

@@ -64,6 +64,7 @@
 | `--shadow-sm` | `0 1px 3px rgba(0,0,0,0.3)` | `0 1px 3px rgba(31,35,40,0.08)` |
 | `--shadow-md` | `0 4px 12px rgba(0,0,0,0.4)` | `0 4px 12px rgba(31,35,40,0.1)` |
 | `--shadow-card` | `0 2px 8px rgba(0,0,0,0.25)` | `0 2px 8px rgba(31,35,40,0.06)` |
+| `--text-primary` | `#e6edf3` | `#1f2328` |
 
 ### 需要特殊覆盖的样式
 
@@ -83,6 +84,7 @@
 | `.search-match` | 搜索高亮 | 背景 `rgba(154, 103, 0, 0.15)`，文字 `#633c01` |
 | `.modal-overlay` | 弹窗遮罩 | `rgba(31, 35, 40, 0.4)` |
 | `.btn-primary` | 主要按钮文字颜色 | 文字 `#ffffff` |
+| `.chart-toggle` | Model Analytics 切换按钮容器 | `box-shadow: inset 0 1px 3px rgba(0,0,0,0.1)`，`border: 1px solid var(--border)` |
 | `.welcome h2` | 欢迎页标题渐变 | `linear-gradient(135deg, var(--accent), var(--thinking-text))` |
 | `::-webkit-scrollbar-thumb` | 滚动条滑块 | `#c0c8d0`，hover `#8c959f` |
 | `.diff-split-table .diff-code.del` | Diff 删除行 | 背景 `rgba(255, 129, 130, 0.2)`，文字 `#82071e` |
@@ -104,7 +106,7 @@
 | `public/index.html` | `<button id="themeToggleBtn">`（第 18 行） | 切换按钮 HTML，位于 `.sidebar-header` 中 |
 | `public/app.js` | `initTheme()`（第 910 行） | 页面加载时从 localStorage 读取主题并应用 |
 | `public/app.js` | `applyTheme(theme)`（第 918 行） | 设置 `data-theme` 属性并更新按钮图标 |
-| `public/app.js` | `toggleTheme()`（第 929 行） | 切换主题并持久化到 localStorage |
+| `public/app.js` | `toggleTheme()`（第 929 行） | 切换主题并持久化到 localStorage，同时调用 `Stats.redrawChart()` 重绘 Canvas |
 | `public/app.js` | `cacheDom()` → `dom.themeToggleBtn`（第 58 行） | 缓存切换按钮 DOM 引用 |
 | `public/app.js` | `bindEvents()` → `themeToggleBtn`（第 888 行） | 绑定点击事件到 `toggleTheme()` |
 | `public/app.js` | `window.App.toggleTheme`（第 988 行） | 暴露为全局 API |
@@ -132,6 +134,7 @@
 
 ## 已知问题 / TODO
 
-- [ ] Canvas 图表（`public/modules/stats.js` 中的 tokenChart、modelPieChart）颜色硬编码在 JS 中（如 `#30363d` 网格线、`#8b949e` 文字、`#0d1117` 背景），不随主题切换变化
+- [ ] Canvas 图表（`public/modules/stats.js` 中的 tokenChart）部分颜色仍硬编码在 JS 中（如 `#30363d` 网格线、`#8b949e` 文字），不随主题切换变化
+- [x] modelPieChart 甜甜圈图的分割线已适配主题（亮色用 `#ffffff`，暗色用 `#0d1117`），切换主题时自动重绘
 - [ ] 时间线热力图（`public/modules/timeline.js`）格子颜色硬编码在 JS 中，不随主题切换
 - [ ] 浅色主题下部分覆盖样式使用硬编码值而非 CSS 变量，增加了维护成本；可考虑引入更多语义化变量来减少硬编码覆盖

@@ -1106,6 +1106,9 @@
     var next = current === 'dark' ? 'light' : 'dark';
     applyTheme(next);
     localStorage.setItem('theme', next);
+    if (window.Stats && typeof window.Stats.redrawChart === 'function') {
+      window.Stats.redrawChart();
+    }
   }
 
   // =========================================================================
