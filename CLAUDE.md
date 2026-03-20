@@ -44,7 +44,7 @@ docs/                     # 项目文档（详见 docs/README.md）
 - `app.js`（`window.App`）是主编排器，调用各模块的 `init()` 并暴露共享工具函数：`api()`, `escapeHtml()`, `formatDate()`, `formatTime()`, `showView()`, `showToast()`
 - Router ↔ App 双向调用，用 `_routerDriven` 和 `_navigating` 标志防止循环
 
-## 9 个 API 端点
+## 10 个 API 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -57,6 +57,7 @@ docs/                     # 项目文档（详见 docs/README.md）
 | GET | `/api/tags` | 所有已用标签 |
 | GET | `/api/timeline` | 时间线热力图数据 |
 | GET | `/api/prompts` | 用户 Prompt 列表 |
+| POST | `/api/open-terminal` | 打开系统终端恢复会话 |
 
 ## 数据层要点
 

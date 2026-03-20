@@ -11,7 +11,7 @@
 - [导出](export.md) - 导出当前对话的消息内容
 - [会话管理](session-management.md) - 详情页头部的重命名/标签/收藏按钮
 - [数据存储](data-storage.md) - JSONL 消息解析和消息合并逻辑
-- [API 参考](api-reference.md) - 会话详情的 API 端点（含分页和文件变更）
+- [API 参考](api-reference.md) - 会话详情的 API 端点（含分页、文件变更和 Resume 终端）
 - [技术架构](architecture.md) - ChatView 和 DiffView 模块在前端架构中的位置
 
 ## 功能细节
@@ -160,7 +160,7 @@
 - 收藏星标按钮
 - 会话标题（使用 `smartTitle` 逻辑）
 - 重命名按钮
-- Prompts 按钮（Toggle 模式：隐藏 AI 回复，只显示 USER 消息）+ Files 按钮（显示文件变更数量角标）+ 标签按钮 + 导出按钮
+- Resume 按钮（"▶ Resume"，点击打开系统终端恢复会话，Claude 执行 `claude --resume`，Codex 执行 `codex resume`）+ Prompts 按钮（Toggle 模式：隐藏 AI 回复，只显示 USER 消息）+ Files 按钮（显示文件变更数量角标）+ 标签按钮 + 导出按钮
 - 元信息行：日期、消息数、git 分支
 - 标签展示区
 
@@ -192,7 +192,11 @@
 | 前端 | public/modules/diff-view.js:collectChangeChunks() | 收集 diff 中所有变更块位置 |
 | 前端 | public/modules/diff-view.js:goToMessage() | 关闭弹窗并跳转到对应消息 |
 | 前端 | public/app.js:openSession() | 加载会话数据 + 传递 fileChanges 到 DiffView |
-| 前端 | public/app.js:setupChatHeader() | 设置对话头部信息 |
+| 前端 | public/app.js:setupChatHeader() | 设置对话头部信息 + Resume 按钮文案切换 |
+| 前端 | public/app.js:resumeSession() | Resume 按钮：调用后端打开终端恢复会话 |
+| 前端 | public/app.js:isCodexProject() | 判断是否 Codex 项目 |
+| 后端 | server.js:openTerminalWithCommand() | 跨平台打开系统终端执行命令 |
+| 后端 | server.js:`POST /api/open-terminal` | Resume 按钮后端接口 |
 | 后端 | server.js:extractFileChanges() | 从消息中提取 Edit/Write 操作 |
 | 后端 | server.js:parseSessionMessages() | 消息解析 + 合并 |
 | 后端 | server.js:GET /api/projects/:pid/sessions/:sid | 会话详情 API（含 fileChanges） |

@@ -56,6 +56,7 @@
     dom.timelineBtn = $('#timelineBtn');
     dom.timelineBackBtn = $('#timelineBackBtn');
     dom.refreshSessionsBtn = $('#refreshSessionsBtn');
+    dom.resumeBtn = $('#resumeBtn');
     dom.refreshChatBtn = $('#refreshChatBtn');
     dom.toast = $('#toast');
     dom.themeToggleBtn = $('#themeToggleBtn');
@@ -731,8 +732,45 @@
       }
     }
 
+    // Resume 按钮：Claude 和 Codex 都支持恢复会话
+    if (dom.resumeBtn) {
+      dom.resumeBtn.innerHTML = '&#9654; Resume';
+      dom.resumeBtn.title = '在终端中恢复此会话';
+    }
+
     // Favorite button state (#6)
     updateFavoriteButton(data.isFavorite);
+  }
+
+  /**
+   * 判断是否为 Codex 项目（projectId 以 "codex:" 开头）。
+   */
+  function isCodexProject(pid) {
+    return pid && pid.startsWith('codex:');
+  }
+
+  /**
+   * 在系统终端中恢复当前会话（Claude）或打开项目目录（Codex）。
+   * 调用后端 POST /api/open-terminal 接口。
+   */
+  async function resumeSession() {
+    if (!state.currentProjectId || !state.currentSessionId) {
+      showToast('No active session', 'error');
+      return;
+    }
+    try {
+      await api('/api/open-terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: state.currentProjectId,
+          sessionId: state.currentSessionId,
+        }),
+      });
+      showToast('Terminal opened');
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+    }
   }
 
   function updateFavoriteButton(isFavorite) {
@@ -919,6 +957,11 @@
           window.Features.toggleFavorite();
         }
       });
+    }
+
+    // Resume 按钮：在终端中恢复会话
+    if (dom.resumeBtn) {
+      dom.resumeBtn.addEventListener('click', resumeSession);
     }
 
     // Global search button

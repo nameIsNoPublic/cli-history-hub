@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = 3456;
@@ -466,6 +467,7 @@ function readCodexSessionHead(filePath) {
     const obj = JSON.parse(firstLine);
     if (obj.type === 'session_meta' && obj.payload) {
       return {
+        id: obj.payload.id || null,
         cwd: obj.payload.cwd || null,
         model: obj.payload.model || null,
         cli_version: obj.payload.cli_version || null,
@@ -1567,6 +1569,99 @@ app.get('/api/prompts', (req, res) => {
       pageSize,
       totalPages
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================================================================
+// POST /api/open-terminal — 在系统终端中打开会话
+// ===========================================================================
+
+/**
+ * 在系统终端中执行指定命令，跨平台支持 Windows / macOS / Linux。
+ * 终端进程独立于 Node 服务运行（detached + unref）。
+ * @param {string} projectPath - 项目目录绝对路径
+ * @param {string} command - 要在终端中执行的 CLI 命令
+ */
+function openTerminalWithCommand(projectPath, command) {
+  const platform = process.platform;
+  if (platform === 'win32') {
+    // Windows：将正斜杠转为反斜杠，cmd.exe 不识别正斜杠路径
+    const winPath = projectPath.replace(/\//g, '\\');
+    // 使用 shell: true 让整个命令通过 cmd.exe 解释，避免参数转义问题
+    spawn(`start cmd.exe /k "cd /d "${winPath}" && ${command}"`, {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } else if (platform === 'darwin') {
+    // macOS：用 osascript 调用 Terminal.app 执行脚本
+    const script = `tell application "Terminal" to do script "cd '${projectPath.replace(/'/g, "\\'")}' && ${command.replace(/"/g, '\\"')}"`;
+    spawn('osascript', ['-e', script], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } else {
+    // Linux：用 x-terminal-emulator 打开终端
+    spawn('x-terminal-emulator', ['-e', `bash -c "cd '${projectPath.replace(/'/g, "\\'")}' && ${command}; exec bash"`], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  }
+}
+
+app.post('/api/open-terminal', (req, res) => {
+  try {
+    const { projectId, sessionId } = req.body;
+    if (!projectId || !sessionId) {
+      return res.status(400).json({ error: 'Missing projectId or sessionId' });
+    }
+
+    // sessionId 安全校验：只允许字母、数字、横杠、下划线、点号
+    if (!/^[a-zA-Z0-9\-_.]+$/.test(sessionId)) {
+      return res.status(400).json({ error: 'Invalid sessionId format' });
+    }
+
+    let projectPath;
+    let command;
+
+    if (isCodexProject(projectId)) {
+      // Codex 项目：从缓存中查找 projectPath 和会话文件
+      const codexProjects = getCodexProjects();
+      const cp = codexProjects.find(p => p.projectId === projectId);
+      if (!cp || !cp.projectPath) {
+        return res.status(404).json({ error: 'Codex project not found' });
+      }
+      projectPath = cp.projectPath;
+      // 从会话文件中读取 Codex CLI 需要的真实 session ID（payload.id）
+      const sess = cp.sessions.find(s => s.sessionId === sessionId);
+      let realSessionId = sessionId;
+      if (sess && sess.filePath) {
+        const head = readCodexSessionHead(sess.filePath);
+        if (head && head.id) {
+          realSessionId = head.id;
+        }
+      }
+      command = `codex resume ${realSessionId}`;
+    } else {
+      // Claude 项目：通过 getProjectPath 获取实际项目路径
+      const dirPath = path.join(PROJECTS_DIR, projectId);
+      projectPath = getProjectPath(dirPath);
+      if (!projectPath) {
+        return res.status(404).json({ error: 'Project path not found' });
+      }
+      command = `claude --resume ${sessionId}`;
+    }
+
+    // 校验项目目录是否存在
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: `Project directory does not exist: ${projectPath}` });
+    }
+
+    console.log('[open-terminal] projectPath:', projectPath, '| command:', command);
+    openTerminalWithCommand(projectPath, command);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -2,7 +2,7 @@
 
 ## 概述
 
-CLI History Hub 后端提供 9 个 RESTful API 端点，全部定义在 `server.js` 中。所有接口返回 JSON 格式数据，错误时返回 `{ error: string }`。
+CLI History Hub 后端提供 10 个 RESTful API 端点，全部定义在 `server.js` 中。所有接口返回 JSON 格式数据，错误时返回 `{ error: string }`。
 
 ## 关联功能
 
@@ -30,6 +30,7 @@ CLI History Hub 后端提供 9 个 RESTful API 端点，全部定义在 `server.
 | 7 | GET | `/api/timeline` | 时间线热力图数据 |
 | 8 | GET | `/api/tags` | 获取所有已用标签 |
 | 9 | GET | `/api/prompts` | 用户 Prompt 列表 |
+| 10 | POST | `/api/open-terminal` | 打开系统终端恢复会话 |
 
 ---
 
@@ -636,6 +637,66 @@ CLI History Hub 后端提供 9 个 RESTful API 端点，全部定义在 `server.
 | 文件 | 函数/行号 |
 |------|----------|
 | server.js | `GET /api/prompts` 路由 |
+
+---
+
+<a id="open-terminal"></a>
+## 10. POST /api/open-terminal
+
+打开系统终端并恢复 CLI 会话（Claude）或进入项目目录（Codex）。
+
+### 请求
+
+**请求体（JSON）：**
+
+```json
+{
+  "projectId": "-Users-username-myproject",
+  "sessionId": "abc123-def456"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `projectId` | string | **必填**。项目 ID |
+| `sessionId` | string | **必填**。会话 ID（仅允许字母、数字、横杠、下划线、点号） |
+
+### 响应
+
+成功：
+```json
+{
+  "ok": true
+}
+```
+
+失败：
+```json
+{
+  "error": "Project path not found"
+}
+```
+
+### 实现细节
+
+- **Claude 项目**：通过 `getProjectPath()` 解析项目目录，执行 `claude --resume SESSION_ID`
+- **Codex 项目**：从 `getCodexProjects()` 查找 `projectPath`，执行 `codex resume SESSION_ID`
+- **安全校验**：sessionId 白名单正则 `/^[a-zA-Z0-9\-_.]+$/`，projectPath 必须是已存在的目录
+- **跨平台终端启动**：
+  - Windows：`cmd.exe /c start` 打开新窗口
+  - macOS：`osascript` 调用 Terminal.app
+  - Linux：`x-terminal-emulator`
+- 终端进程使用 `{ detached: true, stdio: 'ignore' }` + `.unref()` 独立于 Node 服务
+
+### 涉及代码
+
+| 文件 | 函数/行号 |
+|------|----------|
+| server.js | `POST /api/open-terminal` 路由 |
+| server.js | `openTerminalWithCommand()` - 跨平台终端启动 |
+| server.js | `isCodexProject()` - 判断项目来源 |
+| server.js | `getProjectPath()` - 解析 Claude 项目路径 |
+| server.js | `getCodexProjects()` - 获取 Codex 项目列表 |
 
 ---
 
