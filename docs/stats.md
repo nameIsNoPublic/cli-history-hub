@@ -2,11 +2,11 @@
 
 ## 概述
 
-展示 Claude Code 和 Codex CLI 的 Token 使用统计数据，包括汇总卡片、每日用量柱状图、按项目和模型的分类明细。统计数据同时包含两个数据源。
+展示 Claude Code、Codex CLI 和 Gemini CLI 的 Token 使用统计数据，包括汇总卡片、每日用量柱状图、按项目和模型的分类明细。统计数据目前同时汇总三个数据源，其中 Gemini 仅接入统计链路。
 
 ## 关联功能
 
-- [数据存储](data-storage.md) - Token 数据来源于 JSONL 文件中 assistant 消息的 usage 字段
+- [数据存储](data-storage.md) - Token 数据来源于 Claude/Codex 的 JSONL，以及 Gemini 的 session JSON
 - [API 参考](api-reference.md) - 使用 `/api/stats` 端点
 - [浏览与导航](browse-and-navigate.md) - 通过侧边栏按钮或 URL 路由进入统计页
 - [技术架构](architecture.md) - Stats 模块在前端架构中的位置
@@ -21,7 +21,7 @@
 
 ### 项目筛选
 
-页面头部的下拉框可选择查看特定项目或全部项目的统计。切换时重新请求数据。
+页面头部的下拉框可选择查看特定 Claude/Codex 项目或全部项目的统计。Gemini 项目当前仅出现在汇总统计中，不出现在顶部筛选下拉框。
 
 ### 汇总卡片
 
@@ -34,7 +34,7 @@
 | Total Sessions | `totalSessions` |
 | Total Messages | `totalMessages` |
 
-数字格式化为带逗号的形式（如 1,234,567）。
+普通数字格式化为带逗号的形式（如 1,234,567）；Token 数值大于等于 1,000,000 时按 `M` 单位显示（如 1.5M）。
 
 ### 每日 Token 用量图表
 
@@ -66,7 +66,7 @@
 | Input Tokens | 该项目的输入 Token 总量 |
 | Output Tokens | 该项目的输出 Token 总量 |
 
-按总 Token 量降序排列。
+按总 Token 量降序排列。Claude/Codex 行支持点击跳转回项目；Gemini 行当前仅用于展示统计，不支持点击跳转。
 
 **按模型 (By Model)：**
 
@@ -97,11 +97,17 @@
 | 前端 | public/modules/stats.js:272-282 | `niceRoundUp()` - Y 轴刻度算法 |
 | 前端 | public/modules/stats.js:288-341 | `renderBreakdown()` - 分类表格 |
 | 前端 | public/modules/stats.js:383-393 | `formatShortNumber()` - K/M 格式化 |
-| 后端 | server.js:601-733 | `GET /api/stats` |
+| 后端 | server.js | `GET /api/stats` |
 
 ## API 接口
 
 - `GET /api/stats?project=projectId` → [API 参考](api-reference.md#stats)
+
+### 数据源说明
+
+- **Claude Code**：从 `assistant.message.usage` 读取 input/output/cache tokens
+- **Codex CLI**：从 `event_msg.payload.info.total_token_usage` 读取 tokens
+- **Gemini CLI**：从 `~/.gemini/tmp/*/chats/session-*.json` 中 `message.tokens` 与 `message.model` 读取 tokens 和模型名
 
 ## 修改指南
 

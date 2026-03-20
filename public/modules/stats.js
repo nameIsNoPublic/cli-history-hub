@@ -15,12 +15,30 @@ window.Stats = (function () {
   let statsBreakdown;
 
   const MODEL_PRICING = [
-    { regex: /opus/i, in: 15, out: 75, color: '#a371f7' },
-    { regex: /sonnet/i, in: 3, out: 15, color: '#58a6ff' },
-    { regex: /haiku/i, in: 0.25, out: 1.25, color: '#d29922' },
-    { regex: /synthetic/i, in: 0, out: 0, color: '#8b949e' }
+    { regex: /opus/i, in: 15, out: 75 },
+    { regex: /sonnet/i, in: 3, out: 15 },
+    { regex: /haiku/i, in: 0.25, out: 1.25 },
+    { regex: /synthetic/i, in: 0, out: 0 }
   ];
-  const DEFAULT_PRICING = { in: 3, out: 15, color: '#7ee787' };
+  const DEFAULT_PRICING = { in: 3, out: 15 };
+  const MODEL_COLOR_PALETTE = [
+    '#ff6b6b',
+    '#4dabf7',
+    '#ffd43b',
+    '#51cf66',
+    '#f783ac',
+    '#845ef7',
+    '#ffa94d',
+    '#2ec4b6',
+    '#e64980',
+    '#94d82d',
+    '#339af0',
+    '#fcc419',
+    '#20c997',
+    '#ff922b',
+    '#5c7cfa',
+    '#66d9e8'
+  ];
 
   let modelChartMode = 'cost'; // 'cost' or 'tokens'
   let cachedByModelData = [];
@@ -147,8 +165,8 @@ window.Stats = (function () {
     var totalMessages = data.totalMessages || 0;
 
     statsCards.innerHTML =
-      createCard('Total Input Tokens', formatNumber(inputTokens)) +
-      createCard('Total Output Tokens', formatNumber(outputTokens)) +
+      createCard('Total Input Tokens', formatTokenCount(inputTokens)) +
+      createCard('Total Output Tokens', formatTokenCount(outputTokens)) +
       createCard('Total Sessions', formatNumber(totalSessions)) +
       createCard('Total Messages', formatNumber(totalMessages));
   }
@@ -314,13 +332,14 @@ window.Stats = (function () {
       html += '<thead><tr><th>Project</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead>';
       html += '<tbody>';
       byProject.forEach(function (p) {
+        var canNavigate = p.source !== 'gemini';
         html +=
-          '<tr class="clickable-row" data-project="' + escapeHtml(p.projectId || '') + '">' +
+          '<tr' + (canNavigate ? ' class="clickable-row" data-project="' + escapeHtml(p.projectId || '') + '"' : '') + '>' +
             '<td title="' + escapeHtml(p.projectName || '') + '">' +
               escapeHtml(shortenProjectName(p.projectName || p.projectId || '')) +
             '</td>' +
-            '<td>' + formatNumber(p.input || 0) + '</td>' +
-            '<td>' + formatNumber(p.output || 0) + '</td>' +
+            '<td>' + formatTokenCount(p.input || 0) + '</td>' +
+            '<td>' + formatTokenCount(p.output || 0) + '</td>' +
           '</tr>';
       });
       html += '</tbody></table>';
@@ -404,6 +423,7 @@ window.Stats = (function () {
   function buildSlices() {
     var slices = [];
     var totalVal = 0;
+    var usedColors = new Set();
     cachedByModelData.forEach(function(m) {
       var modelName = m.model || 'unknown';
       var pricing = DEFAULT_PRICING;
@@ -427,7 +447,12 @@ window.Stats = (function () {
       }
 
       if (val > 0) {
-        slices.push({ model: modelName, val: val, labelVal: labelVal, color: pricing.color });
+        slices.push({
+          model: modelName,
+          val: val,
+          labelVal: labelVal,
+          color: getModelColor(modelName, usedColors)
+        });
         totalVal += val;
       }
     });
@@ -589,6 +614,19 @@ window.Stats = (function () {
   }
 
   /**
+   * Format token counts, using M for values >= 1,000,000.
+   * e.g., 950000 -> "950,000", 1500000 -> "1.5M"
+   */
+  function formatTokenCount(n) {
+    if (typeof n !== 'number') return String(n);
+    if (n >= 1000000) {
+      var millions = n / 1000000;
+      return (millions % 1 === 0 ? millions.toFixed(0) : millions.toFixed(1)) + 'M';
+    }
+    return formatNumber(n);
+  }
+
+  /**
    * Format a number with K/M suffix for chart labels.
    * e.g., 1200 -> "1.2K", 1500000 -> "1.5M"
    */
@@ -602,6 +640,32 @@ window.Stats = (function () {
       return (k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)) + 'K';
     }
     return String(Math.round(n));
+  }
+
+  function getModelColor(modelName, usedColors) {
+    var baseIndex = Math.abs(hashString(modelName)) % MODEL_COLOR_PALETTE.length;
+    for (var i = 0; i < MODEL_COLOR_PALETTE.length; i++) {
+      var color = MODEL_COLOR_PALETTE[(baseIndex + i) % MODEL_COLOR_PALETTE.length];
+      if (!usedColors.has(color)) {
+        usedColors.add(color);
+        return color;
+      }
+    }
+
+    var fallbackHue = Math.abs(hashString(modelName)) % 360;
+    var fallbackColor = 'hsl(' + fallbackHue + ', 70%, 58%)';
+    usedColors.add(fallbackColor);
+    return fallbackColor;
+  }
+
+  function hashString(str) {
+    var hash = 0;
+    var input = String(str || '');
+    for (var i = 0; i < input.length; i++) {
+      hash = ((hash << 5) - hash) + input.charCodeAt(i);
+      hash |= 0;
+    }
+    return hash;
   }
 
   return {

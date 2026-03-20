@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -10,6 +11,9 @@ const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const CODEX_SESSIONS_DIR = path.join(CODEX_DIR, 'sessions');
 const CODEX_INDEX_PATH = path.join(CODEX_DIR, 'session_index.jsonl');
+const GEMINI_DIR = path.join(os.homedir(), '.gemini');
+const GEMINI_TMP_DIR = path.join(GEMINI_DIR, 'tmp');
+const GEMINI_PROJECTS_PATH = path.join(GEMINI_DIR, 'projects.json');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -348,6 +352,85 @@ function listProjectDirs() {
 }
 
 // ---------------------------------------------------------------------------
+// Gemini stats helpers
+// ---------------------------------------------------------------------------
+function findGeminiSessionFiles(dir) {
+  const results = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findGeminiSessionFiles(fullPath));
+      } else if (entry.name.startsWith('session-') && entry.name.endsWith('.json')) {
+        results.push(fullPath);
+      }
+    }
+  } catch { /* directory doesn't exist */ }
+  return results;
+}
+
+function readGeminiProjectRoots() {
+  try {
+    const data = JSON.parse(fs.readFileSync(GEMINI_PROJECTS_PATH, 'utf-8'));
+    return Object.keys(data.projects || {});
+  } catch {
+    return [];
+  }
+}
+
+function collectKnownProjectPaths() {
+  const known = new Set(readGeminiProjectRoots());
+
+  known.add(os.homedir());
+
+  for (const { dirPath } of listProjectDirs()) {
+    const projectPath = getProjectPath(dirPath);
+    if (projectPath) known.add(projectPath);
+  }
+
+  for (const cp of getCodexProjects()) {
+    if (cp.projectPath) known.add(cp.projectPath);
+  }
+
+  return Array.from(known).sort((a, b) => b.length - a.length);
+}
+
+function buildGeminiProjectPathMap(knownPaths) {
+  const pathMap = new Map();
+  for (const projectPath of knownPaths) {
+    const projectHash = crypto.createHash('sha256').update(projectPath).digest('hex');
+    pathMap.set(projectHash, projectPath);
+  }
+  return pathMap;
+}
+
+function resolveGeminiProjectPath(projectHash, sessionData, knownPaths, hashToPath) {
+  if (projectHash && hashToPath.has(projectHash)) {
+    return hashToPath.get(projectHash);
+  }
+
+  if (!sessionData || !Array.isArray(sessionData.messages)) {
+    return projectHash ? `gemini:${projectHash}` : 'unknown';
+  }
+
+  for (const message of sessionData.messages) {
+    if (!Array.isArray(message.toolCalls)) continue;
+    for (const toolCall of message.toolCalls) {
+      const filePath = toolCall && toolCall.args && toolCall.args.file_path;
+      if (!filePath || !path.isAbsolute(filePath)) continue;
+
+      const matchedRoot = knownPaths.find(projectPath =>
+        filePath === projectPath || filePath.startsWith(projectPath + path.sep)
+      );
+      if (matchedRoot) return matchedRoot;
+    }
+  }
+
+  return projectHash ? `gemini:${projectHash}` : 'unknown';
+}
+
+// ---------------------------------------------------------------------------
 // Extract file changes (Edit/Write operations) from parsed messages
 // ---------------------------------------------------------------------------
 function extractFileChanges(messages) {
@@ -452,25 +535,53 @@ function codexSessionIdFromPath(filePath) {
 }
 
 /**
- * Read only the first line (session_meta) from a Codex JSONL file to extract cwd.
- * Returns { cwd, model } or null.
+ * Read lightweight Codex session info needed for grouping and model stats.
+ * Newer Codex logs record the actual model in turn_context instead of session_meta.
+ * Returns { cwd, model, cli_version } or null.
  */
 function readCodexSessionHead(filePath) {
+  const cacheKey = 'codex-head:' + filePath;
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { return null; }
+
+  const cached = sessionCache.get(cacheKey);
+  if (cached && cached.mtime === stat.mtimeMs) {
+    return cached.data;
+  }
+
   try {
-    const fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(16384);
-    const bytesRead = fs.readSync(fd, buf, 0, 16384, 0);
-    fs.closeSync(fd);
-    const firstLine = buf.toString('utf-8', 0, bytesRead).split('\n')[0];
-    if (!firstLine.trim()) return null;
-    const obj = JSON.parse(firstLine);
-    if (obj.type === 'session_meta' && obj.payload) {
-      return {
-        cwd: obj.payload.cwd || null,
-        model: obj.payload.model || null,
-        cli_version: obj.payload.cli_version || null,
-      };
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    let cwd = null;
+    let model = null;
+    let cliVersion = null;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
+
+      if (obj.type === 'session_meta' && obj.payload) {
+        cwd = obj.payload.cwd || cwd;
+        model = obj.payload.model || model;
+        cliVersion = obj.payload.cli_version || cliVersion;
+      } else if (obj.type === 'turn_context' && obj.payload) {
+        model =
+          obj.payload.model ||
+          (obj.payload.collaboration_mode &&
+            obj.payload.collaboration_mode.settings &&
+            obj.payload.collaboration_mode.settings.model) ||
+          model;
+      }
+
+      if (cwd && model && cliVersion) break;
     }
+
+    const head = { cwd, model, cli_version: cliVersion };
+    sessionCache.set(cacheKey, { mtime: stat.mtimeMs, data: head });
+    return head;
   } catch { /* ignore */ }
   return null;
 }
@@ -574,6 +685,15 @@ function extractCodexSessionMeta(filePath, sessionId, displayName) {
       if (obj.type === 'session_meta' && obj.payload) {
         model = obj.payload.model || model;
         continue;
+      }
+
+      if (obj.type === 'turn_context' && obj.payload) {
+        model =
+          obj.payload.model ||
+          (obj.payload.collaboration_mode &&
+            obj.payload.collaboration_mode.settings &&
+            obj.payload.collaboration_mode.settings.model) ||
+          model;
       }
 
       if (obj.type === 'event_msg' && obj.payload) {
@@ -1065,17 +1185,18 @@ app.get('/api/search', (req, res) => {
 app.get('/api/stats', (req, res) => {
   try {
     const projectFilter = req.query.project || null;
+    const geminiProjectFilter = projectFilter && projectFilter.startsWith('gemini:') ? projectFilter : null;
     const projectDirs = listProjectDirs();
-    const targetDirs = projectFilter
+    const targetDirs = projectFilter && !isCodexProject(projectFilter) && !geminiProjectFilter
       ? projectDirs.filter(p => p.dirName === projectFilter)
-      : projectDirs;
+      : (!projectFilter ? projectDirs : []);
 
     const totalTokens = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
     let totalSessions = 0;
     let totalMessages = 0;
 
     const dailyMap = new Map(); // date string -> { input, output }
-    const byProjectMap = new Map(); // projectId -> { projectName, input, output }
+    const byProjectMap = new Map(); // projectId -> { projectName, input, output, source }
     const byModelMap = new Map(); // model -> { count, output }
 
     // Determine the 30-day window
@@ -1166,15 +1287,16 @@ app.get('/api/stats', (req, res) => {
           projectName,
           input: projectInput,
           output: projectOutput,
+          source: 'claude',
         });
       }
     }
 
     // Aggregate Codex stats
     const codexProjects = getCodexProjects();
-    const targetCodexStats = projectFilter
+    const targetCodexStats = projectFilter && !geminiProjectFilter
       ? codexProjects.filter(p => p.projectId === projectFilter)
-      : codexProjects;
+      : (!projectFilter ? codexProjects : []);
 
     for (const cp of targetCodexStats) {
       let projectInput = 0;
@@ -1248,7 +1370,90 @@ app.get('/api/stats', (req, res) => {
           projectName: cp.projectPath,
           input: projectInput,
           output: projectOutput,
+          source: 'codex',
         });
+      }
+    }
+
+    // Aggregate Gemini stats
+    if (!projectFilter || geminiProjectFilter) {
+      const knownProjectPaths = collectKnownProjectPaths();
+      const geminiProjectPathMap = buildGeminiProjectPathMap(knownProjectPaths);
+      const geminiSessionFiles = findGeminiSessionFiles(GEMINI_TMP_DIR);
+
+      for (const filePath of geminiSessionFiles) {
+        let sessionData;
+        try { sessionData = JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch { continue; }
+
+        const projectHash = sessionData.projectHash || null;
+        const projectId = 'gemini:' + (projectHash || sessionData.sessionId || path.basename(filePath, '.json'));
+        if (geminiProjectFilter && projectId !== geminiProjectFilter) continue;
+
+        const projectPath = resolveGeminiProjectPath(projectHash, sessionData, knownProjectPaths, geminiProjectPathMap);
+        const messages = Array.isArray(sessionData.messages) ? sessionData.messages : [];
+
+        let projectInput = 0;
+        let projectOutput = 0;
+        let sessionHasMessages = false;
+
+        for (const msg of messages) {
+          if (msg.type === 'user' || msg.type === 'gemini') {
+            totalMessages++;
+            sessionHasMessages = true;
+          }
+
+          if (msg.type === 'gemini' && msg.tokens) {
+            const tokens = msg.tokens;
+            const inputTok = tokens.input || 0;
+            const outputTok = tokens.output || 0;
+            const cacheRead = tokens.cached || 0;
+
+            totalTokens.input += inputTok;
+            totalTokens.output += outputTok;
+            totalTokens.cacheRead += cacheRead;
+
+            projectInput += inputTok;
+            projectOutput += outputTok;
+
+            if (msg.timestamp) {
+              const ts = new Date(msg.timestamp);
+              if (ts >= thirtyDaysAgo) {
+                const dateStr = ts.toISOString().split('T')[0];
+                const existing = dailyMap.get(dateStr) || { input: 0, output: 0 };
+                existing.input += inputTok;
+                existing.output += outputTok;
+                dailyMap.set(dateStr, existing);
+              }
+            }
+
+            const model = msg.model || 'unknown';
+            const modelEntry = byModelMap.get(model) || { count: 0, input: 0, output: 0 };
+            modelEntry.count += 1;
+            modelEntry.input += inputTok;
+            modelEntry.output += outputTok;
+            byModelMap.set(model, modelEntry);
+          }
+        }
+
+        if (sessionHasMessages) {
+          totalSessions++;
+        }
+
+        if (projectInput > 0 || projectOutput > 0) {
+          const existingProject = byProjectMap.get(projectId);
+          if (existingProject) {
+            existingProject.input += projectInput;
+            existingProject.output += projectOutput;
+          } else {
+            byProjectMap.set(projectId, {
+              projectId,
+              projectName: projectPath,
+              input: projectInput,
+              output: projectOutput,
+              source: 'gemini',
+            });
+          }
+        }
       }
     }
 
