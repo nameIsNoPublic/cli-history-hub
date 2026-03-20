@@ -66,11 +66,11 @@
 展示选中项目的所有会话，支持时间分组和筛选。
 
 **会话卡片包含：**
-- 标题（智能标题逻辑，见下文）
-- 副标题（firstPrompt 预览，仅当与标题不同时显示）
-- 元信息行：修改时间、消息数、git 分支
-- 标签列表
-- 收藏星标（仅收藏的显示）
+- **标题**（智能标题逻辑，见下文）：`.session-title`，`font-weight: 600`，`font-size: 15px`，`margin-bottom: 12px`
+- **副标题**（firstPrompt 预览，仅当与标题不同时显示）：`.session-subtitle`，`color: var(--text-secondary)`，`font-size: 12px`，`opacity: 0.85`
+- **元信息行**：修改时间、消息数、git 分支（`.session-meta`，增加顶部间距）
+- **标签列表**：`.session-tags`
+- **收藏星标**：`.session-star`（仅收藏的会话在标题左侧显示）
 
 **智能标题逻辑 (`smartTitle`)：**
 1. 有 `customName` → 直接用
