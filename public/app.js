@@ -1,5 +1,5 @@
 /**
- * Claude Code History Viewer - Main Application
+ * CLI History Hub - Main Application
  *
  * Orchestrates modules: Router, Search, ChatView, Stats, Features
  * Exposes window.App for module interop.
@@ -48,9 +48,17 @@
     dom.exportBtn = $('#exportBtn');
     dom.favoriteBtn = $('#favoriteBtn');
     dom.globalSearchBtn = $('#globalSearchBtn');
+    dom.promptsBtn = $('#promptsBtn');
+    dom.projectPromptsBtn = $('#projectPromptsBtn');
+    dom.sessionPromptsBtn = $('#sessionPromptsBtn');
     dom.statsBtn = $('#statsBtn');
     dom.statsBackBtn = $('#statsBackBtn');
+    dom.timelineBtn = $('#timelineBtn');
+    dom.timelineBackBtn = $('#timelineBackBtn');
+    dom.refreshSessionsBtn = $('#refreshSessionsBtn');
+    dom.refreshChatBtn = $('#refreshChatBtn');
     dom.toast = $('#toast');
+    dom.themeToggleBtn = $('#themeToggleBtn');
   }
 
   // =========================================================================
@@ -119,6 +127,8 @@
     sessions: 'sessionListView',
     chat: 'chatView',
     stats: 'statsView',
+    timeline: 'timelineView',
+    prompts: 'promptsView',
   };
 
   /**
@@ -145,6 +155,8 @@
     if (!dom.toast) return;
     dom.toast.textContent = message;
     dom.toast.classList.remove('hidden');
+    // Force reflow to restart animation
+    void dom.toast.offsetWidth;
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(function () {
       dom.toast.classList.add('hidden');
@@ -238,8 +250,55 @@
     if (!dom.projectList) return;
     dom.projectList.innerHTML = '';
 
+    // Split by source
+    var claudeProjects = [];
+    var codexProjects = [];
     for (var i = 0; i < state.projects.length; i++) {
-      var proj = state.projects[i];
+      if (state.projects[i].source === 'codex') {
+        codexProjects.push(state.projects[i]);
+      } else {
+        claudeProjects.push(state.projects[i]);
+      }
+    }
+
+    // Render Claude Code group
+    if (claudeProjects.length > 0) {
+      renderProjectGroup(dom.projectList, 'Claude Code', 'claude', claudeProjects);
+    }
+
+    // Render Codex group
+    if (codexProjects.length > 0) {
+      renderProjectGroup(dom.projectList, 'Codex CLI', 'codex', codexProjects);
+    }
+  }
+
+  function renderProjectGroup(container, label, source, projects) {
+    var wrapper = document.createElement('div');
+    wrapper.className = 'project-group-wrapper';
+
+    // Restore collapsed state
+    var isCollapsed = localStorage.getItem('projectGroup_' + source) === 'true';
+    if (isCollapsed) {
+      wrapper.classList.add('collapsed');
+    }
+
+    var header = document.createElement('div');
+    header.className = 'project-group-header ' + source;
+    header.innerHTML = '<span class="project-group-dot"></span>' + escapeHtml(label) +
+      '<span class="project-group-count">' + projects.length + '</span>' +
+      '<span class="project-group-chevron">&#9660;</span>';
+    
+    header.addEventListener('click', function() {
+      wrapper.classList.toggle('collapsed');
+      localStorage.setItem('projectGroup_' + source, wrapper.classList.contains('collapsed'));
+    });
+    wrapper.appendChild(header);
+
+    var itemsContainer = document.createElement('div');
+    itemsContainer.className = 'project-group-items';
+
+    for (var i = 0; i < projects.length; i++) {
+      var proj = projects[i];
       var item = document.createElement('div');
       item.className = 'project-item';
       if (proj.id === state.currentProjectId) {
@@ -253,8 +312,11 @@
       (function (pid) {
         item.addEventListener('click', function () { selectProject(pid); });
       })(proj.id);
-      dom.projectList.appendChild(item);
+      itemsContainer.appendChild(item);
     }
+
+    wrapper.appendChild(itemsContainer);
+    container.appendChild(wrapper);
   }
 
   // =========================================================================
@@ -550,15 +612,26 @@
       // Set up chat header
       setupChatHeader(sessionInfo, data);
 
+      // Pass file changes to DiffView module
+      if (window.DiffView && window.DiffView.setFileChanges) {
+        window.DiffView.setFileChanges(data.fileChanges || []);
+      }
+
       // Render messages via ChatView module
-      if (window.ChatView && window.ChatView.render) {
-        window.ChatView.render(state.currentMessages, {
-          page: data.page,
-          totalPages: data.totalPages,
-          totalMessages: data.totalMessages,
-        });
+      if (window.ChatView) {
+        if (data.source === 'codex' && window.ChatView.renderCodex) {
+          // Codex: transparent passthrough, render raw events
+          window.ChatView.renderCodex(data);
+        } else if (window.ChatView.render) {
+          window.ChatView.render(state.currentMessages, {
+            page: data.page,
+            totalPages: data.totalPages,
+            totalMessages: data.totalMessages,
+            searchKeyword: state.activeSearchKeyword
+          });
+        }
+        state.activeSearchKeyword = null;
       } else if (dom.messagesContainer) {
-        // Fallback: basic rendering if ChatView module is not loaded
         dom.messagesContainer.innerHTML = '';
         renderMessagesFallback(state.currentMessages);
       }
@@ -678,6 +751,7 @@
   // =========================================================================
 
   function goBackToSessions() {
+    resetPromptsOnly();
     state.currentSessionId = null;
     state.currentMessages = [];
     state.currentSessionMeta = {};
@@ -695,6 +769,50 @@
     }
   }
 
+  // =========================================================================
+  // Prompts-only toggle (session level)
+  // =========================================================================
+
+  var _promptsOnlyActive = false;
+
+  function togglePromptsOnly() {
+    _promptsOnlyActive = !_promptsOnlyActive;
+    var chatView = document.getElementById('chatView');
+    var btn = document.getElementById('sessionPromptsBtn');
+    var bar = document.getElementById('promptsOnlyBar');
+
+    if (!chatView) return;
+
+    if (_promptsOnlyActive) {
+      chatView.classList.add('prompts-only');
+      if (btn) btn.classList.add('active');
+      if (bar) bar.classList.remove('hidden');
+    } else {
+      chatView.classList.remove('prompts-only');
+      if (btn) btn.classList.remove('active');
+      if (bar) bar.classList.add('hidden');
+    }
+
+    // Re-execute search if search bar is open, so results match current visibility
+    var searchBar = document.getElementById('chatSearchBar');
+    var searchInput = document.getElementById('chatSearchInput');
+    if (searchBar && !searchBar.classList.contains('hidden') && searchInput && searchInput.value.trim()) {
+      if (window.ChatView && window.ChatView.refreshSearch) {
+        window.ChatView.refreshSearch();
+      }
+    }
+  }
+
+  function resetPromptsOnly() {
+    _promptsOnlyActive = false;
+    var chatView = document.getElementById('chatView');
+    var btn = document.getElementById('sessionPromptsBtn');
+    var bar = document.getElementById('promptsOnlyBar');
+    if (chatView) chatView.classList.remove('prompts-only');
+    if (btn) btn.classList.remove('active');
+    if (bar) bar.classList.add('hidden');
+  }
+
   async function refreshCurrentSession() {
     if (state.currentProjectId && state.currentSessionId) {
       await openSession(state.currentSessionId);
@@ -702,10 +820,66 @@
   }
 
   // =========================================================================
+  // Data refresh (visibility-based + manual)
+  // =========================================================================
+
+  /**
+   * Refresh data for the currently active view.
+   */
+  async function refreshCurrentView() {
+    if (state.currentSessionId && state.currentProjectId) {
+      // Chat detail view: reload session messages
+      await openSession(state.currentSessionId);
+    } else if (state.currentProjectId) {
+      // Session list view: reload sessions
+      await loadSessions(state.currentProjectId);
+    } else {
+      // Welcome view: reload project list
+      await loadProjects();
+    }
+  }
+
+  /**
+   * Set up visibility-based auto-refresh.
+   * When the page becomes visible again (user switches back to this tab),
+   * automatically refresh the current view's data.
+   * Throttled: at most once per 5 seconds to avoid unnecessary requests.
+   */
+  var _lastRefreshTime = 0;
+  var REFRESH_THROTTLE_MS = 5000;
+
+  function setupVisibilityRefresh() {
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        var now = Date.now();
+        if (now - _lastRefreshTime >= REFRESH_THROTTLE_MS) {
+          _lastRefreshTime = now;
+          refreshCurrentView();
+        }
+      }
+    });
+  }
+
+  // =========================================================================
   // Event binding (#8)
   // =========================================================================
 
   function bindEvents() {
+    // Home link (Claude Code title)
+    var homeBtn = document.getElementById('homeBtn');
+    var homeBtnSub = document.getElementById('homeBtnSub');
+    function goHome() {
+      state.currentProjectId = null;
+      state.currentSessionId = null;
+      resetPromptsOnly();
+      renderProjectList();
+      showView('welcome');
+      if (window.Router) window.Router.navigate('#/');
+      document.querySelectorAll('.sidebar-btn').forEach(function (btn) { btn.classList.remove('active'); });
+    }
+    if (homeBtn) homeBtn.addEventListener('click', goHome);
+    if (homeBtnSub) homeBtnSub.addEventListener('click', goHome);
+
     // Back button
     if (dom.backBtn) {
       dom.backBtn.addEventListener('click', goBackToSessions);
@@ -756,6 +930,63 @@
       });
     }
 
+    // Prompts back button
+    var promptsBackBtn = document.getElementById('promptsBackBtn');
+    if (promptsBackBtn) {
+      promptsBackBtn.addEventListener('click', function () {
+        if (state.currentSessionId && state.currentProjectId) {
+          showView('chat');
+          if (window.Router) window.Router.navigate('#/project/' + encodeURIComponent(state.currentProjectId) + '/session/' + encodeURIComponent(state.currentSessionId));
+        } else if (state.currentProjectId) {
+          showView('sessions');
+          if (window.Router) window.Router.navigate('#/project/' + encodeURIComponent(state.currentProjectId));
+        } else {
+          showView('welcome');
+          if (window.Router) window.Router.navigate('#/');
+        }
+        if (dom.promptsBtn) dom.promptsBtn.classList.remove('active');
+      });
+    }
+
+    // Prompts library buttons (sidebar = toggle)
+    if (dom.promptsBtn) {
+      dom.promptsBtn.addEventListener('click', function () {
+        var promptsView = document.getElementById('promptsView');
+        if (promptsView && promptsView.classList.contains('active')) {
+          // Already on prompts → go back
+          if (state.currentSessionId && state.currentProjectId) {
+            showView('chat');
+            if (window.Router) window.Router.navigate('#/project/' + encodeURIComponent(state.currentProjectId) + '/session/' + encodeURIComponent(state.currentSessionId));
+          } else if (state.currentProjectId) {
+            showView('sessions');
+            if (window.Router) window.Router.navigate('#/project/' + encodeURIComponent(state.currentProjectId));
+          } else {
+            showView('welcome');
+            if (window.Router) window.Router.navigate('#/');
+          }
+          dom.promptsBtn.classList.remove('active');
+        } else if (window.Prompts && window.Prompts.activate) {
+          window.Prompts.activate();
+          if (window.Router) window.Router.navigate('#/prompts');
+        }
+      });
+    }
+    if (dom.projectPromptsBtn) {
+      dom.projectPromptsBtn.addEventListener('click', function () {
+        if (window.Prompts && window.Prompts.activate && state.currentProjectId) {
+          window.Prompts.activate(state.currentProjectId);
+          if (window.Router) window.Router.navigate('#/prompts/project/' + encodeURIComponent(state.currentProjectId));
+        }
+      });
+    }
+    if (dom.sessionPromptsBtn) {
+      dom.sessionPromptsBtn.addEventListener('click', togglePromptsOnly);
+    }
+    var promptsOnlyDismiss = document.getElementById('promptsOnlyDismiss');
+    if (promptsOnlyDismiss) {
+      promptsOnlyDismiss.addEventListener('click', togglePromptsOnly);
+    }
+
     // Stats button
     if (dom.statsBtn) {
       dom.statsBtn.addEventListener('click', function () {
@@ -763,6 +994,36 @@
           window.Stats.show();
         } else {
           showView('stats');
+        }
+      });
+    }
+
+    // Timeline button
+    if (dom.timelineBtn) {
+      dom.timelineBtn.addEventListener('click', function () {
+        if (window.Timeline && window.Timeline.show) {
+          window.Timeline.show();
+        } else {
+          showView('timeline');
+        }
+      });
+    }
+
+    // Timeline back button
+    if (dom.timelineBackBtn) {
+      dom.timelineBackBtn.addEventListener('click', function () {
+        if (state.currentSessionId) {
+          showView('chat');
+        } else if (state.currentProjectId) {
+          if (window.Router && window.Router.navigate) {
+            window.Router.navigate('#/project/' + encodeURIComponent(state.currentProjectId));
+          }
+          showView('sessions');
+        } else {
+          if (window.Router && window.Router.navigate) {
+            window.Router.navigate('#/');
+          }
+          showView('welcome');
         }
       });
     }
@@ -780,6 +1041,29 @@
       });
     }
 
+    // Refresh buttons
+    if (dom.refreshSessionsBtn) {
+      dom.refreshSessionsBtn.addEventListener('click', function () {
+        if (state.currentProjectId) {
+          showToast('Refreshing...');
+          loadSessions(state.currentProjectId);
+        }
+      });
+    }
+    if (dom.refreshChatBtn) {
+      dom.refreshChatBtn.addEventListener('click', function () {
+        if (state.currentSessionId) {
+          showToast('Refreshing...');
+          openSession(state.currentSessionId);
+        }
+      });
+    }
+
+    // Theme toggle
+    if (dom.themeToggleBtn) {
+      dom.themeToggleBtn.addEventListener('click', toggleTheme);
+    }
+
     // Branch filter change (#3)
     if (dom.branchFilter) {
       dom.branchFilter.addEventListener('change', applyFilters);
@@ -792,11 +1076,95 @@
   }
 
   // =========================================================================
+  // Theme toggle (dark/light)
+  // =========================================================================
+
+  /**
+   * Initialize theme from localStorage. Defaults to 'dark' if no preference.
+   */
+  function initTheme() {
+    var saved = localStorage.getItem('theme') || 'dark';
+    applyTheme(saved);
+  }
+
+  /**
+   * Apply a theme by setting data-theme on <html> and updating the toggle icon.
+   */
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    if (dom.themeToggleBtn) {
+      // Sun icon in dark mode (click to switch to light), moon icon in light mode
+      dom.themeToggleBtn.innerHTML = theme === 'dark' ? '&#9788;' : '&#9790;';
+    }
+  }
+
+  /**
+   * Toggle between dark and light themes, persisting the choice.
+   */
+  function toggleTheme() {
+    var current = document.documentElement.dataset.theme || 'dark';
+    var next = current === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    localStorage.setItem('theme', next);
+  }
+
+  // =========================================================================
+  // Sidebar splitter (drag to resize)
+  // =========================================================================
+
+  function initSplitter() {
+    var splitter = document.getElementById('splitter');
+    var sidebar = document.getElementById('sidebar');
+    if (!splitter || !sidebar) return;
+
+    var startX, startWidth;
+
+    splitter.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = sidebar.offsetWidth;
+      splitter.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      function onMouseMove(e) {
+        var newWidth = startWidth + (e.clientX - startX);
+        if (newWidth < 180) newWidth = 180;
+        if (newWidth > 500) newWidth = 500;
+        sidebar.style.width = newWidth + 'px';
+      }
+
+      function onMouseUp() {
+        splitter.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        // Save preference
+        localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
+      }
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+
+    // Restore saved width
+    var saved = localStorage.getItem('sidebarWidth');
+    if (saved) {
+      var w = parseInt(saved, 10);
+      if (w >= 180 && w <= 500) {
+        sidebar.style.width = w + 'px';
+      }
+    }
+  }
+
+  // =========================================================================
   // Initialization
   // =========================================================================
 
   async function init() {
     cacheDom();
+    initTheme();
     bindEvents();
 
     // Initialize sub-modules
@@ -804,6 +1172,15 @@
     if (window.Stats && window.Stats.init) window.Stats.init();
     if (window.Search && window.Search.init) window.Search.init();
     if (window.Features && window.Features.init) window.Features.init();
+    if (window.DiffView && window.DiffView.init) window.DiffView.init();
+    if (window.Timeline && window.Timeline.init) window.Timeline.init();
+    if (window.Prompts && window.Prompts.init) window.Prompts.init();
+
+    // Auto-refresh when tab becomes visible
+    setupVisibilityRefresh();
+
+    // Initialize sidebar splitter
+    initSplitter();
 
     // Load project list
     await loadProjects();
@@ -837,6 +1214,7 @@
     formatDate: formatDate,
     formatTime: formatTime,
     updateFavoriteButton: updateFavoriteButton,
+    toggleTheme: toggleTheme,
   };
 
   // =========================================================================

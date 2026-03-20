@@ -2,7 +2,7 @@
 
 ## 概述
 
-展示 Claude Code 的 Token 使用统计数据，包括汇总卡片、每日用量柱状图、按项目和模型的分类明细。
+展示 Claude Code 和 Codex CLI 的 Token 使用统计数据，包括汇总卡片、每日用量柱状图、按项目和模型的分类明细。统计数据同时包含两个数据源。
 
 ## 关联功能
 
@@ -10,6 +10,7 @@
 - [API 参考](api-reference.md) - 使用 `/api/stats` 端点
 - [浏览与导航](browse-and-navigate.md) - 通过侧边栏按钮或 URL 路由进入统计页
 - [技术架构](architecture.md) - Stats 模块在前端架构中的位置
+- [Codex CLI 集成](codex-integration.md) - 统计数据包含 Codex 用量
 
 ## 功能细节
 
@@ -139,3 +140,9 @@
 - [ ] 图表没有 tooltip（悬停显示具体数值）
 - [ ] 没有数据导出功能（导出统计数据为 CSV）
 - [ ] 每日图表固定 30 天，不能自定义时间范围
+
+### 最近优化记录 (Recent Updates)
+- **看板交互穿越**：`By Project` 的报表行支持 hover 态与点击穿越，附带 `projectId` 触发 Router 单页无缝跳转回该项目的对话列表。
+- **多模型财务饼图 (Model Analytics)**：
+  - 弃用基础的模型文本表格，在右侧新增基于纯原生 Vanilla JS 实现的 Canvas 甜甜圈图（Doughnut Chart）及交互式 Hover 图例。
+  - 首创 `Cost($) vs Tokens` 业务视图解耦。前端内置定价映射表，支持一键切换评估 "吃量模型" 与 "烧钱模型" 的占比落差，极大增强视觉冲击和洞察力。

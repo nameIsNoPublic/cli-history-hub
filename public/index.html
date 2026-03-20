@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude Code History Viewer</title>
+  <title>CLI History Hub</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -13,23 +13,29 @@
     <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
-        <h1>Claude Code</h1>
-        <p class="subtitle">History Viewer</p>
+        <h1 id="homeBtn" class="home-link">CLI History</h1>
+        <p id="homeBtnSub" class="subtitle home-link">Hub</p>
+        <button id="themeToggleBtn" class="btn-theme-toggle" title="Toggle Theme">&#9788;</button>
       </div>
       <div class="sidebar-actions">
         <button id="globalSearchBtn" class="sidebar-btn" title="Global Search">&#128269; Search</button>
+        <button id="promptsBtn" class="sidebar-btn" title="Prompt Library">&#128221; Prompts</button>
         <button id="statsBtn" class="sidebar-btn" title="Statistics">&#128202; Stats</button>
+        <button id="timelineBtn" class="sidebar-btn" title="Timeline">&#128197; Timeline</button>
       </div>
       <nav id="projectList"></nav>
     </aside>
+
+    <!-- Resizable splitter -->
+    <div id="splitter" class="splitter"></div>
 
     <!-- Main content -->
     <main id="content">
       <!-- Welcome view -->
       <div id="welcomeView" class="view active">
         <div class="welcome">
-          <h2>Claude Code History Viewer</h2>
-          <p>Select a project from the sidebar to browse conversation history.</p>
+          <h2>CLI History Hub</h2>
+          <p>Browse and manage your AI coding assistant conversation history.</p>
         </div>
       </div>
 
@@ -39,6 +45,8 @@
           <h2 id="sessionListTitle"></h2>
           <span id="sessionCount" class="badge"></span>
           <div class="header-actions">
+            <button id="projectPromptsBtn" class="btn-sm" title="View all prompts in this project">&#128221; Prompts</button>
+            <button id="refreshSessionsBtn" class="btn-refresh" title="Refresh">&#8635; Refresh</button>
             <select id="branchFilter" class="filter-select">
               <option value="">All Branches</option>
             </select>
@@ -50,6 +58,11 @@
 
       <!-- Chat detail view -->
       <div id="chatView" class="view">
+        <!-- Scroll FABs -->
+        <div class="scroll-fab-container">
+          <button id="scrollTopBtn" class="scroll-fab hidden" title="Scroll to Top">&#8679;</button>
+          <button id="scrollBottomBtn" class="scroll-fab hidden" title="Scroll to Bottom">&#8681;</button>
+        </div>
         <div class="view-header chat-header">
           <button id="backBtn" class="btn-icon" title="Back">&larr;</button>
           <div class="chat-title-wrap">
@@ -58,6 +71,9 @@
             <button id="renameBtn" class="btn-icon-sm" title="Rename">&#9998;</button>
           </div>
           <div class="chat-header-right">
+            <button id="sessionPromptsBtn" class="btn-sm" title="View prompts only">&#128221; Prompts</button>
+            <button id="filesBtn" class="btn-sm hidden" title="File Changes">&#128196; Files <span id="fileCountBadge" class="file-count-badge hidden"></span></button>
+            <button id="refreshChatBtn" class="btn-refresh" title="Refresh">&#8635; Refresh</button>
             <button id="tagBtn" class="btn-sm" title="Manage Tags">&#127991; Tags</button>
             <button id="exportBtn" class="btn-sm" title="Export">&#128228; Export</button>
           </div>
@@ -66,11 +82,65 @@
             <span id="chatTags" class="tags-display"></span>
           </div>
         </div>
+        <div id="chatSearchBar" class="chat-search-bar hidden">
+          <div class="chat-search-inner">
+            <input type="text" id="chatSearchInput" placeholder="Search in conversation...">
+            <div class="chat-search-opts">
+              <button id="chatSearchMatchCase" class="btn-icon-sm search-opt-btn" title="Match Case">Aa</button>
+              <button id="chatSearchWholeWord" class="btn-icon-sm search-opt-btn" title="Match Whole Word">\b</button>
+              <button id="chatSearchRegex" class="btn-icon-sm search-opt-btn" title="Use Regular Expression">.*</button>
+            </div>
+            <span id="chatSearchCount" class="chat-search-count"></span>
+            <button id="chatSearchPrev" class="btn-icon-sm" title="Previous match">&#9650;</button>
+            <button id="chatSearchNext" class="btn-icon-sm" title="Next match">&#9660;</button>
+            <button id="chatSearchClose" class="btn-icon-sm" title="Close search">&#10005;</button>
+          </div>
+        </div>
+        <div id="promptsOnlyBar" class="prompts-only-bar hidden">
+          <span>Showing prompts only</span>
+          <button id="promptsOnlyDismiss" class="prompts-only-dismiss">Show all messages</button>
+        </div>
         <div id="chatMessages" class="chat-messages">
           <div id="loadMoreTop" class="load-more hidden">
             <button id="loadMoreBtn" class="btn-sm">Load earlier messages</button>
           </div>
           <div id="messagesContainer"></div>
+        </div>
+      </div>
+
+      <!-- Diff modal (full-screen) -->
+      <div id="diffModal" class="diff-modal hidden">
+        <div class="diff-modal-overlay"></div>
+        <div class="diff-modal-container">
+          <div class="diff-modal-topbar">
+            <div class="diff-topbar-left">
+              <span class="diff-topbar-title">File Changes</span>
+              <span id="diffFileCounter" class="diff-topbar-counter"></span>
+            </div>
+            <div class="diff-topbar-nav">
+              <button id="diffPrevBtn" class="diff-nav-btn" title="Previous file (&#8592;)">&larr; Prev</button>
+              <button id="diffNextBtn" class="diff-nav-btn" title="Next file (&#8594;)">Next &rarr;</button>
+            </div>
+            <button id="diffCloseBtn" class="diff-close-btn" title="Close (Esc)">&times;</button>
+          </div>
+          <div class="diff-modal-body">
+            <div id="diffFileSidebar" class="diff-sidebar"></div>
+            <div class="diff-main">
+              <div id="diffHeader" class="diff-content-header"></div>
+              <div id="diffViewport" class="diff-viewport"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline view -->
+      <div id="timelineView" class="view">
+        <div class="view-header">
+          <button id="timelineBackBtn" class="btn-icon" title="Back">&larr;</button>
+          <h2>Activity Timeline</h2>
+        </div>
+        <div class="timeline-content">
+          <div id="timelineHeatmap" class="timeline-heatmap"></div>
         </div>
       </div>
 
@@ -90,6 +160,29 @@
             <canvas id="tokenChart" width="800" height="300"></canvas>
           </div>
           <div class="stats-breakdown" id="statsBreakdown"></div>
+        </div>
+      </div>
+
+      <!-- Prompts Library view -->
+      <div id="promptsView" class="view">
+        <div class="view-header prompts-header">
+          <button id="promptsBackBtn" class="btn-icon" title="Back">&larr;</button>
+          <h2>Prompt Library</h2>
+          <div class="header-actions">
+            <select id="promptsProjectFilter" class="filter-select">
+              <option value="">All Projects</option>
+            </select>
+            <select id="promptsSessionFilter" class="filter-select">
+              <option value="">All Sessions</option>
+            </select>
+            <button id="refreshPromptsBtn" class="btn-refresh" title="Refresh">&#8635; Refresh</button>
+          </div>
+        </div>
+        <div id="promptsContent" class="prompts-content">
+          <div id="promptsGrid" class="prompts-grid"></div>
+          <div id="promptsLoadMore" class="load-more hidden">
+            <button id="promptsLoadMoreBtn" class="btn-sm">Load more prompts...</button>
+          </div>
         </div>
       </div>
     </main>
@@ -163,6 +256,9 @@
       <div id="searchResults" class="search-results">
         <p class="search-hint">Enter keywords to search in conversation content.</p>
       </div>
+      <div class="modal-actions">
+        <button id="searchCloseBtn" class="btn btn-cancel">Close</button>
+      </div>
     </div>
   </div>
 
@@ -174,7 +270,10 @@
   <script src="/modules/search.js"></script>
   <script src="/modules/chat-view.js"></script>
   <script src="/modules/stats.js"></script>
+  <script src="/modules/timeline.js"></script>
   <script src="/modules/features.js"></script>
+  <script src="/modules/diff-view.js"></script>
+  <script src="/modules/prompts.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

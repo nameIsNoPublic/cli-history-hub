@@ -1,5 +1,5 @@
 /**
- * search.js - Global full-text search for Claude Code History Viewer
+ * search.js - Global full-text search for CLI History Hub
  *
  * Provides a search modal (Cmd+K / Ctrl+K) that queries the backend
  * and displays results with highlighted match context.
@@ -12,6 +12,7 @@ window.Search = (function () {
   let input;
   let projectFilter;
   let resultsContainer;
+  let closeBtn;
 
   // Debounce timer handle
   let _debounceTimer = null;
@@ -25,9 +26,14 @@ window.Search = (function () {
     input = document.getElementById('globalSearchInput');
     projectFilter = document.getElementById('searchProjectFilter');
     resultsContainer = document.getElementById('searchResults');
+    closeBtn = document.getElementById('searchCloseBtn');
 
     // Close on overlay click
     overlay.addEventListener('click', close);
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', close);
+    }
 
     // Debounced search on input
     input.addEventListener('input', function () {
@@ -169,8 +175,10 @@ window.Search = (function () {
       var timestamp = result.timestamp ? formatTimestamp(result.timestamp) : '';
 
       item.innerHTML =
-        '<div class="search-result-project">' + projectName + '</div>' +
-        '<div class="search-result-session">' + sessionName + '</div>' +
+        '<div class="search-result-header">' +
+          '<span class="badge project-badge">' + projectName + '</span>' +
+          '<span class="search-result-session">' + sessionName + '</span>' +
+        '</div>' +
         '<div class="search-result-context">' + context + '</div>' +
         (timestamp ? '<div class="search-result-time">' + timestamp + '</div>' : '');
 
@@ -179,6 +187,9 @@ window.Search = (function () {
       var sId = result.sessionId;
       item.addEventListener('click', function () {
         close();
+        if (window.App && window.App.state) {
+          window.App.state.activeSearchKeyword = query;
+        }
         // Set hash directly (don't use Router.navigate which suppresses hashchange)
         window.location.hash = '#/project/' + encodeURIComponent(pId) + '/session/' + encodeURIComponent(sId);
       });

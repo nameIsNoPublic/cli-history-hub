@@ -1,37 +1,68 @@
-# Gemini AI Assistant Configuration
+# GEMINI.md
 
-**核心规则：全程说中文**
+**核心设定：在所有对话中请严格执行“全程说中文”。**
 
 ---
 
-## 项目背景 (Project Context)
-本项目是一个基于 Node.js 和 Express 开发的 **Claude Code 会话历史记录查看器**。
-它的主要作用是读取你的本地目录（`~/.claude/projects/`）中的 `.jsonl` 格式对话历史文件，并在本地启动一个 Web 服务，提供可视化界面以供在浏览器中查询、浏览所有的对话记录和详细交互过程。
+## 项目概述
+CLI History Hub — 本地 Web 应用，用于浏览和管理 Claude Code CLI 及 Codex 的对话历史。
+后端完全基于 Node.js + Express，前端纯原生 JS/CSS，无数据库，直接读取 `~/.claude/projects/` 和 `~/.codex/sessions/` 下的 JSONL 文件。
 
-## 技术栈与目录结构 (Tech Stack & Structure)
-- **后端服务端**: Node.js + Express
-  - Node 版本要求：建议使用 `Node.js 22.14.0`（通过 `.nvmrc` 或最新稳定版），最低兼容 `>=8.9`。
-  - 入口文件：`server.js`，启动后监听本地 `3456` 端口。
-- **前端页面**: 原生 HTML / CSS / Vanilla JavaScript
-  - 代码位置：主要集中在独立的 `public/` 目录下（包含 `app.js`、`style.css`、`index.html`）。
-  - 没有复杂的脚手架和构建工具链（如 Webpack、Vite 等），即改即生效。
-
-## AI 协助开发与修改规范 (Guidelines for AI)
-为了在后续的 AI （特别是 Gemini）协助开发中保持该项目的风格一致性和安全性，请始终遵循以下开发指导原则：
-
-1. **坚持只读原则处理核心日志**：主要的历史记录数据来源于 Claude。在任何涉及 `~/.claude/projects/` 目录下 `.jsonl` 文件的逻辑中，必须坚持“只读不写”的设定。唯一允许写入的数据是独立的侧载数据（如通过重命名产生的 `session-meta/*.json` 文件）。
-2. **轻量级、原生化前端**：在为前端增加新功能、修改样式时，请继续使用当前原生的 API（DOM 操作）和原生的 CSS，**不要引入任何需要编译或打包的外部大型框架（如 React/Vue）**。保持其轻量和纯粹的特性。
-3. **安全与路径校验**：当后端需要根据前端传入的文件 `id`、项目名等信息读取文件系统时，请始终进行路径合法性验证（防范目录遍历漏洞），绝不可向外暴露任何非日志相关级别的本地系统文件。
-
-## 项目依赖与启动命令 (Setup & Run)
-如果是首次运行或补充了新的依赖，请先安装：
+## 启动命令
 ```bash
-npm install
+npm install    # 安装依赖（仅 express）
+npm start      # 启动服务，浏览器访问 http://localhost:3456
 ```
 
-启动本地查看服务端：
-```bash
-npm start
+## 项目结构与模块划分
+```
+─ server.js                 # 全部后端逻辑（Express + 8 个 API + JSONL 解析 + 缓存机制）
+─ public/
+  ├─ index.html             # SPA 入口（4 视图 + 4 弹窗）
+  ├─ style.css              # 全局 CSS，暗色主题
+  ├─ app.js                 # 主应用（window.App）：状态管理、视图切换、项目/会话列表编排
+  └─ modules/
+     ├─ router.js           # Hash 路由（window.Router）
+     ├─ chat-view.js        # 消息渲染 + 分页（window.ChatView）
+     ├─ search.js           # 全局搜索弹窗（window.Search）
+     ├─ stats.js            # 统计面板 + Canvas 图表（window.Stats）
+     ├─ prompts.js          # Prompts 指令库（window.Prompts）
+     └─ features.js         # 重命名/标签/收藏/导出（window.Features）
+─ docs/                     # 项目说明文档目录（详见 docs/README.md）
 ```
 
-启动成功后，浏览器访问 `http://localhost:3456` 即可查看图形化界面。
+## 核心开发与架构规范 (严格遵守)
+
+1. **绝对只读 JSONL**：`~/.claude/projects/` 和 `~/.codex/sessions/` 下的 `.jsonl` 文件只允许读取。所有的用户侧数据（重命名、标签、收藏等）必须写入独立的 `session-meta/*.json` sidecar 文件中。
+2. **轻量极简前端**：坚持原生 Vanilla JS + CSS。**严禁**引入 React/Vue 等框架，**严禁**使用 Webpack/Vite 等构建工具。模块间一律通过 `window.*` 全局对象进行通信。
+3. **单一依赖后端**：`package.json` 的生产依赖仅限 `express`，除非绝对必要，不引入额外 npm 包。
+4. **安全底线**：后端读取文件时必须做路径合法性校验，严防目录遍历（Path Traversal），绝不能向外暴露非日志相关的系统文件。
+5. **前端数据流**：模块入口在 `index.html` 按顺序加载。`app.js`（`window.App`）作为主编排器调用各子模块的 `init()`，并暴露公共工具（如 `api()`, `escapeHtml()`, `showView()`）。Router 与 App 之间双向调用时由标志位防死循环。
+
+## 数据层与 API 机制
+
+- **服务端缓存**：`sessionCache`（Map）按 JSONL 路径在内存中缓存解析好的会话元数据。缓存失效严格依赖双 `mtime`（JSONL 文件修改时间 + sidecar 文件修改时间）。
+- **消息清洗与合并**：必须拦截过滤用户消息中 Claude 自动注入的 XML 标签（如 `<system-reminder>`）。对连续的 AI 助理回复，必须在服务端将其合并为一个完整的 Turn（含 Usage 累加）。
+- **8 大核心 API 端点**：
+  - `GET /api/projects`
+  - `GET /api/projects/:pid/sessions-full`
+  - `GET /api/projects/:pid/sessions/:sid` (原生支持 `?page=&pageSize=` 分页)
+  - `PUT /api/projects/:pid/sessions/:sid/meta`
+  - `GET /api/search?q=keyword&project=pid`
+  - `GET /api/stats?project=pid`
+  - `GET /api/tags`
+  - `GET /api/prompts?project=&session=&page=`
+
+## 代码与文档同步铁律
+**改代码前先看文档，改完代码后必须改文档。**
+一旦接手开发任务，修改任何功能逻辑、API 或数据流，**必须**同步更新 `docs/` 目录下对应的 Markdown 文档（见 `docs/README.md`）。不得存在代码与文档脱节的情况。
+
+## Git 提交规范
+必须遵循 Conventional Commits 规范，并在提交时提供准确的上下文：
+- `<type>(<scope>): <description>` (常见 type: feat, fix, docs, refactor, style)
+- 可选 scope 域: `server` / `app` / `router` / `chat-view` / `search` / `stats` / `features` / `api` / `docs`
+
+## 修改代码避坑指南
+1. **服务端单文件**：所有后端 Node.js 逻辑都在 `server.js` 单文件中，修改时仔细处理函数依赖，不要盲目拆分文件。
+2. **前端样式**：所有界面修改只允许更改 `public/style.css`，**绝不允许**在 HTML 或 JS 中塞入 Inline Style 控制样式。
+3. **元数据拓展**：如需在 sidecar 增加新字段（如新出处），需联动修改 `PUT /meta` 路由、`extractSessionMeta()` 解析函数及对应的前端数据消费模块。

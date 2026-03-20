@@ -11,8 +11,8 @@
 - [导出](export.md) - 导出当前对话的消息内容
 - [会话管理](session-management.md) - 详情页头部的重命名/标签/收藏按钮
 - [数据存储](data-storage.md) - JSONL 消息解析和消息合并逻辑
-- [API 参考](api-reference.md) - 会话详情的 API 端点（含分页）
-- [技术架构](architecture.md) - ChatView 模块在前端架构中的位置
+- [API 参考](api-reference.md) - 会话详情的 API 端点（含分页和文件变更）
+- [技术架构](architecture.md) - ChatView 和 DiffView 模块在前端架构中的位置
 
 ## 功能细节
 
@@ -79,6 +79,80 @@
 - `App.openSession()` 完成后滚动到容器底部（`scrollTop = scrollHeight`）
 - 实际效果：app.js 的 scrollBottom 覆盖了 ChatView 的 scrollTop
 
+### 消息复制
+
+用户消息（User turn）的 header 右侧有一个复制按钮（剪贴板图标），hover 时显示，点击复制该条消息的原始文本到剪贴板。
+
+**行为：**
+- 按钮默认隐藏（`opacity: 0`），鼠标悬停 `.message-turn` 时显示
+- 点击后通过 `navigator.clipboard.writeText` 复制，不支持时 fallback 到 `execCommand('copy')`
+- 复制成功显示 Toast "Copied!"
+
+**涉及的代码：**
+- `chat-view.js:createUserTurn()` — 渲染复制按钮 + 绑定点击事件
+- `chat-view.js:copyToClipboard()` / `fallbackCopy()` — 剪贴板操作
+- `style.css:.btn-copy-msg` — 按钮样式（hover 显示 + 高亮）
+
+### 会话内搜索
+
+在聊天详情页头部和消息列表之间有一个可收起的搜索条，支持在当前会话的消息中搜索关键词。
+
+**打开方式：**
+- 快捷键 `Ctrl+F` / `Cmd+F`（chatView 可见时触发）
+- 也可通过 `ChatView.openSearch()` 编程调用
+
+**搜索行为：**
+- 输入框有 300ms 防抖
+- 支持区分大小写 (`Aa`)、全字匹配 (`\b`)、正则表达式 (`.*`) 三种高级搜索模式选项
+- 动态根据选项生成 RegExp，在所有 `.turn-body` 元素中遍历文本节点，用 `<mark class="chat-search-match">` 安全地高亮包裹匹配文本（规避正则切分导致的 HTML 破坏）
+- 当前焦点项额外加 `chat-search-active` class，高亮显示并 scrollIntoView
+- 匹配计数显示格式如 "3/12"
+
+**跳转：**
+- 上/下按钮（或 Enter / Shift+Enter）在匹配项间循环跳转
+- 到末尾自动循环到开头
+
+**关闭：**
+- 点击关闭按钮或按 Escape
+- 关闭后清除所有 `<mark>` 标签，恢复原始 DOM
+
+### 文件变更追踪 + Diff 视图
+
+对话详情页右上方有一个 "Files" 按钮（仅在会话包含文件变更时显示，角标显示文件数量），点击后打开全屏 Modal 弹窗，以 IDE 风格展示会话中所有被修改的文件及其代码 diff。
+
+**数据提取：**
+- 后端 `extractFileChanges()` 从 assistant 消息的 `tool_use` blocks 中提取 `Edit` 和 `Write` 操作
+- 返回数据包含文件路径、变更次数和每次操作的详情（old_string / new_string / content）
+- 通过 session detail API 的 `fileChanges` 字段返回
+
+**全屏 Modal 布局：**
+- **顶栏**：标题 "File Changes" + 文件计数器（如 "3 / 7"）+ Prev/Next 导航按钮 + 关闭按钮
+- **左侧文件列表**：每个文件显示彩色扩展名标签（JS 紫色、CSS 蓝色、HTML 橙色等）、文件名、操作次数、新增/删除行数统计（`+N -M`）；当前选中文件蓝色左边框高亮
+- **右侧 Diff 内容区**：显示当前文件的所有变更操作
+
+**Diff 显示（LCS 逐行对齐的 Side-by-Side 视图）：**
+- 基于 LCS（最长公共子序列）算法逐行对齐旧代码和新代码
+- **左侧**：旧代码，删除行红色背景 + `-` 前缀 + 行号
+- **右侧**：新代码，新增行绿色背景 + `+` 前缀 + 行号
+- **相同行**：两侧同时显示，灰色无高亮
+- **空占位**：删除行对面 / 新增行对面显示灰色空白占位符
+- **Write 操作**：左侧全部空占位，右侧绿色显示新建内容
+- 大内容自动截断（超过 8000 字符），超过 400 行自动降级为简单对比
+- hover 行高亮
+
+**变更块导航（▲▼）：**
+- Diff 内容区右上角有 ▲/▼ 按钮和计数器（如 "3 / 32"）
+- 点击 ▼ 自动滚动到下一个变更块（跳过相同行，直达红/绿改动处）
+- 点击 ▲ 跳回上一个变更块
+- 快捷键：`Shift+↑` / `Shift+↓` 在变更块间跳转
+
+**文件导航与交互：**
+- Prev/Next 按钮或 `←` / `→` 方向键切换文件
+- 点击左侧文件列表直接跳转
+- 每个 diff 操作有 "Go to message" 按钮，点击后关闭弹窗，滚动到对应消息并高亮闪烁
+- `Escape` 键关闭弹窗
+- 支持暗色/浅色主题（浅色下 diff 文字颜色自动适配）
+
 ### 对话头部信息
 
 详情页头部包含：
@@ -86,7 +160,7 @@
 - 收藏星标按钮
 - 会话标题（使用 `smartTitle` 逻辑）
 - 重命名按钮
-- 标签按钮 + 导出按钮
+- Prompts 按钮（Toggle 模式：隐藏 AI 回复，只显示 USER 消息）+ Files 按钮（显示文件变更数量角标）+ 标签按钮 + 导出按钮
 - 元信息行：日期、消息数、git 分支
 - 标签展示区
 
@@ -101,10 +175,27 @@
 | 前端 | public/modules/chat-view.js:196-231 | `createAssistantTurn()` |
 | 前端 | public/modules/chat-view.js:236-263 | `createThinkingBlock()`, `createToolBlock()` |
 | 前端 | public/modules/chat-view.js:269-292 | `bindToggleEvents()` |
-| 前端 | public/app.js:514-576 | `openSession()` - 加载会话数据 + 初始化头部 |
-| 前端 | public/app.js:626-663 | `setupChatHeader()` |
-| 后端 | server.js:217-277 | `parseSessionMessages()` - 消息解析 + 合并 |
-| 后端 | server.js:399-457 | `GET /api/projects/:pid/sessions/:sid` |
+| 前端 | public/modules/chat-view.js | `openSearch()`, `closeSearch()`, `executeSearch()`, `goToMatch()` - 会话内搜索 |
+| 前端 | public/index.html | `#chatSearchBar` - 搜索条 HTML |
+| 前端 | public/style.css | `.chat-search-bar`, `mark.chat-search-match` - 搜索条和高亮样式 |
+| 前端 | public/modules/diff-view.js | `DiffView` 模块 - 全屏 Diff Modal |
+| 前端 | public/modules/diff-view.js:init() | 初始化 DOM 引用、绑定按钮和键盘事件 |
+| 前端 | public/modules/diff-view.js:setFileChanges() | 接收后端文件变更数据、更新角标 |
+| 前端 | public/modules/diff-view.js:open()/close() | 打开/关闭全屏 Modal |
+| 前端 | public/modules/diff-view.js:renderSidebar() | 渲染左侧文件列表（含行数统计） |
+| 前端 | public/modules/diff-view.js:renderDiff() | 渲染右侧 Diff 内容区 + 变更导航按钮 |
+| 前端 | public/modules/diff-view.js:computeLineDiff() | LCS 算法逐行对齐 |
+| 前端 | public/modules/diff-view.js:createEditTable() | Side-by-side Edit diff（LCS 对齐 + 行号） |
+| 前端 | public/modules/diff-view.js:createWriteTable() | Side-by-side Write diff（行号 + 绿色新建） |
+| 前端 | public/modules/diff-view.js:navigateFile() | Prev/Next 文件切换 |
+| 前端 | public/modules/diff-view.js:navigateChunk() | ▲/▼ 变更块跳转 |
+| 前端 | public/modules/diff-view.js:collectChangeChunks() | 收集 diff 中所有变更块位置 |
+| 前端 | public/modules/diff-view.js:goToMessage() | 关闭弹窗并跳转到对应消息 |
+| 前端 | public/app.js:openSession() | 加载会话数据 + 传递 fileChanges 到 DiffView |
+| 前端 | public/app.js:setupChatHeader() | 设置对话头部信息 |
+| 后端 | server.js:extractFileChanges() | 从消息中提取 Edit/Write 操作 |
+| 后端 | server.js:parseSessionMessages() | 消息解析 + 合并 |
+| 后端 | server.js:GET /api/projects/:pid/sessions/:sid | 会话详情 API（含 fileChanges） |
 
 ## API 接口
 
@@ -136,6 +227,10 @@
 
 - [ ] 初始加载时 ChatView 和 App 的滚动行为冲突
 - [ ] thinking 和 tool_use 的内容没有 Markdown 渲染
-- [ ] 没有消息搜索（在当前对话中搜索）
+- [x] ~~没有消息搜索（在当前对话中搜索）~~ — 已实现会话内搜索
 - [ ] 没有消息复制按钮
 - [ ] 分页加载没有 loading 状态提示
+
+### 最近优化记录 (Recent Updates)
+- **长对话导航**：加入页面右下角的悬浮按钮（回到顶部/直达底部），利用 `chatMessages` 的 scroll 事件配合 `debounce` 动态显隐。
+- **全局搜索高亮靶点**：结合 `search.js` 传来的 `activeSearchKeyword`，利用原生 `TreeWalker` 扫描 DOM 文本树，将命中的词汇用 `<mark class="flash-highlight">` 强光包裹、动画淡出，并使用 `scrollIntoView` 居中直达。

@@ -1,4 +1,30 @@
+# Dependencies
 node_modules/
-.DS_Store
-*.log
+
+# Environment
 .env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Session metadata (user local data)
+session-meta/
+
+# Misc
+*.tgz
+.cache/
+tmp/
+.claude/worktrees/

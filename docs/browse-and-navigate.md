@@ -16,18 +16,50 @@
 
 ## 功能细节
 
+### 返回首页
+
+点击侧边栏顶部的 "Claude Code" 或 "History Viewer" 文字可返回 Welcome 首页（`#/`），同时清除当前项目/会话选中状态和所有 sidebar 按钮高亮。
+
+**涉及的代码：**
+- `index.html`：`#homeBtn`（h1）+ `#homeBtnSub`（p），class `home-link`
+- `app.js:bindEvents()` 中 `goHome()` 函数
+- `style.css`：`.home-link` hover 透明度效果
+
 ### 项目列表
 
-侧边栏展示所有包含会话的项目，按会话数量降序排列。
+侧边栏展示所有包含会话的项目，按数据源分组（`🟣 CLAUDE CODE` / `🟢 CODEX CLI`），各组内按会话数量降序排列。
 
 **显示内容：**
+- 分组头：彩色圆点 + 数据源名称 + 项目计数 + 折叠箭头（chevron）
 - 项目短名称（路径最后两段，如 `br_work/myproject`）
 - 会话数量徽章
 - 当前选中项目高亮
 
+**分组折叠/收起：**
+- 点击分组头可折叠/展开该组的项目列表
+- 折叠时 chevron 旋转 -90°，项目列表隐藏
+- 折叠状态通过 `localStorage` 持久化（key: `projectGroup_claude` / `projectGroup_codex`）
+- 涉及的代码：`app.js:renderProjectGroup()` 函数、`style.css` 的 `.project-group-wrapper.collapsed` 样式
+
 **交互：**
 - 点击项目 → 加载会话列表 → URL 变为 `#/project/{pid}`
 - 会自动更新侧边栏高亮状态
+
+### 侧边栏可拖拽调整宽度
+
+侧边栏和主内容区之间有一条可拖拽的分隔条（splitter），用户可以拖动调整侧边栏宽度。
+
+**行为：**
+- 鼠标悬停分隔条时变蓝色高亮，光标变为 `col-resize`
+- 拖拽范围限制在 180px ~ 500px
+- 宽度自动保存到 `localStorage`（key: `sidebarWidth`），下次打开自动恢复
+
+**涉及的代码：**
+| 位置 | 文件 | 说明 |
+|------|------|------|
+| 前端 | public/index.html | `#splitter` div（sidebar 和 content 之间） |
+| 前端 | public/app.js:initSplitter() | 拖拽逻辑 + localStorage 持久化 |
+| 前端 | public/style.css | `.splitter` 样式（宽度、光标、hover/dragging 状态） |
 
 ### 会话列表
 
@@ -60,6 +92,10 @@
 | Earlier | 30 天及更早 |
 
 **实现：** `getTimeGroup()` 函数将日期转为分组名，比较的是日历日期（不含时间），空分组不渲染。
+
+### Prompts 按钮
+
+会话列表 header 区域有一个 Prompts 按钮，点击后跳转到 Prompt Library 视图，自动筛选当前项目的所有用户 Prompt。
 
 ### 分支筛选
 
@@ -99,6 +135,14 @@
 
 **页面加载时：** 如果 URL 含有 hash，`Router.init()` 会解析并导航到对应视图。
 
+### 数据刷新
+
+两种方式确保用户看到最新数据：
+
+**自动刷新：** 利用浏览器的 `visibilitychange` 事件，当用户从其他标签页切回 Viewer 时，自动重新请求当前视图的数据。零轮询、零 WebSocket。
+
+**手动刷新：** 会话列表和对话详情头部各有一个刷新按钮（&#8635;），点击重新加载当前视图数据。
+
 ## 涉及的代码
 
 | 位置 | 文件 | 关键函数/行号 |
@@ -109,6 +153,7 @@
 | 前端 | public/app.js:345-382 | `applyFilters()` |
 | 前端 | public/app.js:388-508 | `renderSessionList()`, `renderTimeGroup()`, `createSessionCard()` |
 | 前端 | public/app.js:159-221 | `GENERIC_NAMES`, `smartTitle()`, `getTimeGroup()`, `TIME_GROUP_ORDER` |
+| 前端 | public/app.js | `refreshCurrentView()`, `setupVisibilityRefresh()` |
 | 前端 | public/modules/router.js | `Router` 模块全部 |
 | 后端 | server.js:354-380 | `GET /api/projects` |
 | 后端 | server.js:385-394 | `GET /api/projects/:pid/sessions-full` |

@@ -1,5 +1,5 @@
 /**
- * features.js - Export, favorites, tags, and rename for Claude Code History Viewer
+ * features.js - Export, favorites, tags, and rename for CLI History Hub
  *
  * Handles export to Markdown/JSON/clipboard (#4), favorite toggling (#6),
  * tag management (#7), and session renaming.
@@ -537,17 +537,9 @@ window.Features = (function () {
   }
 
   function showToast(message) {
-    var toast = document.getElementById('toast');
-    if (!toast) return;
-
-    toast.textContent = message;
-    toast.classList.remove('hidden');
-
-    // Auto-hide after 2.5 seconds
-    clearTimeout(toast._timer);
-    toast._timer = setTimeout(function () {
-      toast.classList.add('hidden');
-    }, 2500);
+    if (window.App && typeof window.App.showToast === 'function') {
+      window.App.showToast(message);
+    }
   }
 
   /**

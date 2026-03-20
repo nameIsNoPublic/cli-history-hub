@@ -7,6 +7,9 @@ const app = express();
 const PORT = 3456;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const CODEX_DIR = path.join(os.homedir(), '.codex');
+const CODEX_SESSIONS_DIR = path.join(CODEX_DIR, 'sessions');
+const CODEX_INDEX_PATH = path.join(CODEX_DIR, 'session_index.jsonl');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -344,6 +347,336 @@ function listProjectDirs() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Extract file changes (Edit/Write operations) from parsed messages
+// ---------------------------------------------------------------------------
+function extractFileChanges(messages) {
+  const fileMap = new Map(); // file path -> { operations: [], changeCount }
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.type !== 'assistant' || !msg.blocks) continue;
+
+    for (const block of msg.blocks) {
+      if (block.type !== 'tool_use') continue;
+      if (block.name !== 'Edit' && block.name !== 'Write') continue;
+
+      const input = block.input || {};
+      const filePath = input.file_path;
+      if (!filePath) continue;
+
+      const op = {
+        type: block.name === 'Edit' ? 'edit' : 'write',
+        timestamp: msg.timestamp || null,
+        messageIndex: i,
+      };
+
+      if (block.name === 'Edit') {
+        op.oldString = input.old_string || '';
+        op.newString = input.new_string || '';
+      } else {
+        // Write operation
+        op.content = input.content || '';
+      }
+
+      if (!fileMap.has(filePath)) {
+        fileMap.set(filePath, { file: filePath, changeCount: 0, operations: [] });
+      }
+      const entry = fileMap.get(filePath);
+      entry.changeCount++;
+      entry.operations.push(op);
+    }
+  }
+
+  return Array.from(fileMap.values());
+}
+
+// ---------------------------------------------------------------------------
+// Codex data source helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the Codex session_index.jsonl to build a map of session ID -> thread_name.
+ */
+function readCodexSessionIndex() {
+  const indexMap = new Map(); // id -> { thread_name, updated_at }
+  try {
+    if (!fs.existsSync(CODEX_INDEX_PATH)) return indexMap;
+    const content = fs.readFileSync(CODEX_INDEX_PATH, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.id) {
+          indexMap.set(obj.id, {
+            thread_name: obj.thread_name || null,
+            updated_at: obj.updated_at || null,
+          });
+        }
+      } catch { /* skip bad lines */ }
+    }
+  } catch { /* index file doesn't exist or unreadable */ }
+  return indexMap;
+}
+
+/**
+ * Recursively find all .jsonl files under ~/.codex/sessions/.
+ */
+function findCodexJsonlFiles(dir) {
+  const results = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findCodexJsonlFiles(fullPath));
+      } else if (entry.name.endsWith('.jsonl')) {
+        results.push(fullPath);
+      }
+    }
+  } catch { /* directory doesn't exist */ }
+  return results;
+}
+
+/**
+ * Extract session ID (UUID) from a Codex filename like rollout-1234567890-abcd-efgh.jsonl.
+ * The UUID is everything after the second hyphen-separated segment (timestamp).
+ */
+function codexSessionIdFromPath(filePath) {
+  const base = path.basename(filePath, '.jsonl');
+  // Format: rollout-<timestamp>-<uuid>
+  // The UUID part may itself contain hyphens, so we split on 'rollout-' prefix
+  // and then strip the timestamp portion
+  const match = base.match(/^rollout-\d+-(.+)$/);
+  return match ? match[1] : base;
+}
+
+/**
+ * Read only the first line (session_meta) from a Codex JSONL file to extract cwd.
+ * Returns { cwd, model } or null.
+ */
+function readCodexSessionHead(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(16384);
+    const bytesRead = fs.readSync(fd, buf, 0, 16384, 0);
+    fs.closeSync(fd);
+    const firstLine = buf.toString('utf-8', 0, bytesRead).split('\n')[0];
+    if (!firstLine.trim()) return null;
+    const obj = JSON.parse(firstLine);
+    if (obj.type === 'session_meta' && obj.payload) {
+      return {
+        cwd: obj.payload.cwd || null,
+        model: obj.payload.model || null,
+        cli_version: obj.payload.cli_version || null,
+      };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * List Codex sessions grouped by cwd (project).
+ * Returns an array of { projectId, projectPath, sessions[] }.
+ * Each session: { sessionId, filePath, displayName, modified, ... }
+ */
+function listCodexProjects() {
+  if (!fs.existsSync(CODEX_SESSIONS_DIR)) return [];
+
+  const indexMap = readCodexSessionIndex();
+  const files = findCodexJsonlFiles(CODEX_SESSIONS_DIR);
+  const projectMap = new Map(); // cwd -> { sessions[] }
+
+  for (const filePath of files) {
+    const sessionId = codexSessionIdFromPath(filePath);
+    const head = readCodexSessionHead(filePath);
+    const cwd = (head && head.cwd) || 'unknown';
+
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { continue; }
+
+    const indexEntry = indexMap.get(sessionId) || {};
+    const displayName = indexEntry.thread_name || null;
+    const modified = indexEntry.updated_at || stat.mtime.toISOString();
+
+    if (!projectMap.has(cwd)) {
+      projectMap.set(cwd, []);
+    }
+    projectMap.get(cwd).push({
+      sessionId,
+      filePath,
+      displayName,
+      modified,
+      model: head ? head.model : null,
+    });
+  }
+
+  const projects = [];
+  for (const [cwd, sessions] of projectMap) {
+    // Generate a project ID that won't collide with Claude project IDs
+    const projectId = 'codex:' + cwd.replace(/\//g, '-').replace(/^-/, '');
+    projects.push({
+      projectId,
+      projectPath: cwd,
+      sessions,
+    });
+  }
+  return projects;
+}
+
+// Codex project cache: projectId -> { sessions[] }
+const codexProjectCache = new Map();
+let codexProjectCacheTime = 0;
+const CODEX_CACHE_TTL = 30000; // 30 seconds
+
+function getCodexProjects() {
+  const now = Date.now();
+  if (now - codexProjectCacheTime < CODEX_CACHE_TTL && codexProjectCache.size > 0) {
+    return Array.from(codexProjectCache.values());
+  }
+  const projects = listCodexProjects();
+  codexProjectCache.clear();
+  for (const p of projects) {
+    codexProjectCache.set(p.projectId, p);
+  }
+  codexProjectCacheTime = now;
+  return projects;
+}
+
+/**
+ * Extract session metadata for a Codex session (for sessions-full listing).
+ */
+function extractCodexSessionMeta(filePath, sessionId, displayName) {
+  const cacheKey = 'codex:' + filePath;
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { return null; }
+
+  const cached = sessionCache.get(cacheKey);
+  if (cached && cached.mtime === stat.mtimeMs) {
+    return cached.data;
+  }
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    let firstPrompt = null;
+    let created = null;
+    let modified = null;
+    let messageCount = 0;
+    let model = null;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
+
+      if (obj.type === 'session_meta' && obj.payload) {
+        model = obj.payload.model || model;
+        continue;
+      }
+
+      if (obj.type === 'event_msg' && obj.payload) {
+        const p = obj.payload;
+        // Track timestamps from event_msg
+        if (obj.timestamp) {
+          if (!created || obj.timestamp < created) created = obj.timestamp;
+          if (!modified || obj.timestamp > modified) modified = obj.timestamp;
+        }
+
+        if (p.type === 'user_message') {
+          messageCount++;
+          if (!firstPrompt && p.message) {
+            firstPrompt = typeof p.message === 'string' ? p.message : JSON.stringify(p.message);
+          }
+        } else if (p.type === 'agent_message') {
+          messageCount++;
+        }
+      }
+    }
+
+    // Fallback timestamps from file stat
+    if (!created) created = stat.birthtime.toISOString();
+    if (!modified) modified = stat.mtime.toISOString();
+
+    const meta = {
+      sessionId,
+      firstPrompt: firstPrompt || 'No prompt',
+      customName: null,
+      displayName: displayName || (firstPrompt ? firstPrompt.substring(0, 100) : 'Untitled'),
+      messageCount,
+      created,
+      modified,
+      gitBranch: null,
+      projectPath: null,
+      tags: [],
+      isFavorite: false,
+      source: 'codex',
+      model,
+    };
+
+    sessionCache.set(cacheKey, { mtime: stat.mtimeMs, sidecarMtime: 0, data: meta });
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse messages from a Codex JSONL file into the internal format.
+ */
+/**
+ * Parse Codex JSONL — transparent passthrough, no format conversion.
+ * Returns raw Codex events with source: 'codex' marker.
+ * Frontend handles rendering via separate Codex rendering path.
+ */
+function parseCodexMessages(filePath) {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  const rawEvents = [];
+  let sessionMeta = null;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+
+    if (obj.type === 'session_meta') {
+      sessionMeta = obj.payload || {};
+      continue;
+    }
+
+    // Pass through all event_msg and turn_context as-is
+    if (obj.type === 'event_msg' || obj.type === 'turn_context') {
+      rawEvents.push(obj);
+    }
+  }
+
+  return { source: 'codex', sessionMeta, rawEvents, customNameFromJsonl: null };
+}
+
+/**
+ * Check if a project ID is a Codex project.
+ */
+function isCodexProject(pid) {
+  return pid.startsWith('codex:');
+}
+
+/**
+ * Find the Codex JSONL file path for a given session ID.
+ */
+function findCodexSessionFile(sessionId) {
+  const projects = getCodexProjects();
+  for (const proj of projects) {
+    for (const sess of proj.sessions) {
+      if (sess.sessionId === sessionId) {
+        return sess.filePath;
+      }
+    }
+  }
+  return null;
+}
+
 // ===========================================================================
 // API ENDPOINTS
 // ===========================================================================
@@ -369,6 +702,28 @@ app.get('/api/projects', (req, res) => {
         name: displayPath,
         shortName: displayPath.split('/').filter(Boolean).slice(-2).join('/') || dirName,
         sessionCount,
+        source: 'claude',
+      });
+    }
+
+    // Merge Codex projects
+    const codexProjects = getCodexProjects();
+    for (const cp of codexProjects) {
+      // Count only sessions with actual messages (consistent with sessions-full filter)
+      var sessionCount = 0;
+      for (const sess of cp.sessions) {
+        const meta = extractCodexSessionMeta(sess.filePath, sess.sessionId, sess.displayName);
+        if (meta && meta.messageCount > 0) sessionCount++;
+      }
+      if (sessionCount === 0) continue;
+
+      const displayPath = cp.projectPath || 'unknown';
+      projects.push({
+        id: cp.projectId,
+        name: displayPath,
+        shortName: displayPath.split('/').filter(Boolean).slice(-2).join('/') || cp.projectId,
+        sessionCount,
+        source: 'codex',
       });
     }
 
@@ -384,7 +739,27 @@ app.get('/api/projects', (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/projects/:pid/sessions-full', (req, res) => {
   try {
-    const projectDir = path.join(PROJECTS_DIR, req.params.pid);
+    const pid = req.params.pid;
+
+    // Handle Codex projects
+    if (isCodexProject(pid)) {
+      const codexProjects = getCodexProjects();
+      const cp = codexProjects.find(p => p.projectId === pid);
+      if (!cp) return res.json([]);
+
+      const sessions = [];
+      for (const sess of cp.sessions) {
+        const meta = extractCodexSessionMeta(sess.filePath, sess.sessionId, sess.displayName);
+        if (meta && meta.messageCount > 0) {
+          sessions.push(meta);
+        }
+      }
+      sessions.sort((a, b) => new Date(b.modified || 0) - new Date(a.modified || 0));
+      return res.json(sessions);
+    }
+
+    // Claude projects
+    const projectDir = path.join(PROJECTS_DIR, pid);
     if (!fs.existsSync(projectDir)) return res.json([]);
     const sessions = scanProjectSessions(projectDir);
     res.json(sessions);
@@ -398,8 +773,35 @@ app.get('/api/projects/:pid/sessions-full', (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
   try {
-    const projectDir = path.join(PROJECTS_DIR, req.params.pid);
-    const jsonlPath = path.join(projectDir, `${req.params.sid}.jsonl`);
+    const pid = req.params.pid;
+    const sid = req.params.sid;
+
+    // Handle Codex sessions
+    if (isCodexProject(pid)) {
+      const codexFile = findCodexSessionFile(sid);
+      if (!codexFile || !fs.existsSync(codexFile)) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // Transparent passthrough — no format conversion
+      const { source, sessionMeta, rawEvents } = parseCodexMessages(codexFile);
+
+      return res.json({
+        source,
+        sessionMeta,
+        rawEvents,
+        customName: null,
+        tags: [],
+        isFavorite: false,
+        totalMessages: rawEvents.filter(e => e.type === 'event_msg' && e.payload && (e.payload.type === 'user_message' || e.payload.type === 'agent_message')).length,
+        page: 1,
+        totalPages: 1,
+      });
+    }
+
+    // Claude sessions
+    const projectDir = path.join(PROJECTS_DIR, pid);
+    const jsonlPath = path.join(projectDir, `${sid}.jsonl`);
     if (!fs.existsSync(jsonlPath)) {
       return res.status(404).json({ error: 'Session not found' });
     }
@@ -411,6 +813,9 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
     const customName = sidecar.customName || customNameFromJsonl || null;
     const tags = sidecar.tags || [];
     const isFavorite = sidecar.isFavorite || false;
+
+    // Extract file changes from all messages
+    const fileChanges = extractFileChanges(messages);
 
     const totalMessages = messages.length;
 
@@ -433,6 +838,7 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
         tags,
         isFavorite,
         messages: sliced,
+        fileChanges,
         totalMessages,
         page,
         pageSize,
@@ -446,6 +852,7 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
       tags,
       isFavorite,
       messages,
+      fileChanges,
       totalMessages,
       page: 1,
       pageSize: totalMessages,
@@ -589,6 +996,63 @@ app.get('/api/search', (req, res) => {
       }
     }
 
+    // Search Codex sessions
+    if (results.length < MAX_RESULTS) {
+      const codexProjects = getCodexProjects();
+      const targetCodex = projectFilter
+        ? codexProjects.filter(p => p.projectId === projectFilter)
+        : codexProjects;
+
+      outerCodex:
+      for (const cp of targetCodex) {
+        for (const sess of cp.sessions) {
+          if (results.length >= MAX_RESULTS) break outerCodex;
+
+          let content;
+          try { content = fs.readFileSync(sess.filePath, 'utf-8'); } catch { continue; }
+
+          for (const line of content.split('\n')) {
+            if (results.length >= MAX_RESULTS) break;
+            if (!line.trim()) continue;
+
+            let obj;
+            try { obj = JSON.parse(line); } catch { continue; }
+
+            if (obj.type !== 'event_msg' || !obj.payload) continue;
+            const p = obj.payload;
+            let searchText = null;
+
+            if (p.type === 'user_message' && p.message) {
+              searchText = typeof p.message === 'string' ? p.message : JSON.stringify(p.message);
+            } else if (p.type === 'agent_message' && p.message) {
+              searchText = typeof p.message === 'string' ? p.message : JSON.stringify(p.message);
+            }
+
+            if (searchText) {
+              const lowerText = searchText.toLowerCase();
+              const idx = lowerText.indexOf(query);
+              if (idx !== -1) {
+                const contextStart = Math.max(0, idx - 50);
+                const contextEnd = Math.min(searchText.length, idx + query.length + 50);
+                const matchContext = (contextStart > 0 ? '...' : '') +
+                  searchText.substring(contextStart, contextEnd) +
+                  (contextEnd < searchText.length ? '...' : '');
+
+                results.push({
+                  projectId: cp.projectId,
+                  projectName: cp.projectPath,
+                  sessionId: sess.sessionId,
+                  sessionName: sess.displayName || sess.sessionId.substring(0, 8),
+                  matchContext,
+                  timestamp: obj.timestamp || null,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -681,8 +1145,9 @@ app.get('/api/stats', (req, res) => {
 
             // By model
             const model = obj.message.model || 'unknown';
-            const modelEntry = byModelMap.get(model) || { count: 0, output: 0 };
+            const modelEntry = byModelMap.get(model) || { count: 0, input: 0, output: 0 };
             modelEntry.count += 1;
+            modelEntry.input += inputTok;
             modelEntry.output += outputTok;
             byModelMap.set(model, modelEntry);
           }
@@ -705,6 +1170,88 @@ app.get('/api/stats', (req, res) => {
       }
     }
 
+    // Aggregate Codex stats
+    const codexProjects = getCodexProjects();
+    const targetCodexStats = projectFilter
+      ? codexProjects.filter(p => p.projectId === projectFilter)
+      : codexProjects;
+
+    for (const cp of targetCodexStats) {
+      let projectInput = 0;
+      let projectOutput = 0;
+      let projectSessionCount = 0;
+
+      for (const sess of cp.sessions) {
+        let content;
+        try { content = fs.readFileSync(sess.filePath, 'utf-8'); } catch { continue; }
+
+        let sessionHasMessages = false;
+
+        for (const line of content.split('\n')) {
+          if (!line.trim()) continue;
+          let obj;
+          try { obj = JSON.parse(line); } catch { continue; }
+
+          if (obj.type === 'event_msg' && obj.payload) {
+            const p = obj.payload;
+            if (p.type === 'user_message' || p.type === 'agent_message') {
+              totalMessages++;
+              sessionHasMessages = true;
+            }
+
+            if (p.type === 'token_count' && p.info && p.info.total_token_usage) {
+              const u = p.info.total_token_usage;
+              const inputTok = u.input_tokens || 0;
+              const outputTok = u.output_tokens || 0;
+              const cachRead = u.cached_input_tokens || 0;
+
+              totalTokens.input += inputTok;
+              totalTokens.output += outputTok;
+              totalTokens.cacheRead += cachRead;
+
+              projectInput += inputTok;
+              projectOutput += outputTok;
+
+              // Daily aggregation
+              if (obj.timestamp) {
+                const ts = new Date(obj.timestamp);
+                if (ts >= thirtyDaysAgo) {
+                  const dateStr = ts.toISOString().split('T')[0];
+                  const existing = dailyMap.get(dateStr) || { input: 0, output: 0 };
+                  existing.input += inputTok;
+                  existing.output += outputTok;
+                  dailyMap.set(dateStr, existing);
+                }
+              }
+
+              // By model
+              const model = sess.model || 'unknown';
+              const modelEntry = byModelMap.get(model) || { count: 0, input: 0, output: 0 };
+              modelEntry.count += 1;
+              modelEntry.input += inputTok;
+              modelEntry.output += outputTok;
+              byModelMap.set(model, modelEntry);
+            }
+          }
+        }
+
+        if (sessionHasMessages) {
+          projectSessionCount++;
+        }
+      }
+
+      totalSessions += projectSessionCount;
+
+      if (projectInput > 0 || projectOutput > 0) {
+        byProjectMap.set(cp.projectId, {
+          projectId: cp.projectId,
+          projectName: cp.projectPath,
+          input: projectInput,
+          output: projectOutput,
+        });
+      }
+    }
+
     // Build daily array sorted by date
     const daily = Array.from(dailyMap.entries())
       .map(([date, vals]) => ({ date, input: vals.input, output: vals.output }))
@@ -716,7 +1263,7 @@ app.get('/api/stats', (req, res) => {
 
     // Build byModel array sorted by count descending
     const byModel = Array.from(byModelMap.entries())
-      .map(([model, vals]) => ({ model, count: vals.count, output: vals.output }))
+      .map(([model, vals]) => ({ model, count: vals.count, input: vals.input, output: vals.output }))
       .sort((a, b) => b.count - a.count);
 
     res.json({
@@ -733,7 +1280,131 @@ app.get('/api/stats', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. GET /api/tags
+// 7. GET /api/timeline?months=3
+// ---------------------------------------------------------------------------
+app.get('/api/timeline', (req, res) => {
+  try {
+    const months = Math.min(Math.max(parseInt(req.query.months, 10) || 3, 1), 12);
+    const now = new Date();
+    const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startDate = new Date(endDate);
+    startDate.setMonth(startDate.getMonth() - months);
+
+    const projectDirs = listProjectDirs();
+    const dayMap = new Map(); // "YYYY-MM-DD" -> { sessionCount, messageCount, totalTokens, sessions[] }
+
+    for (const { dirName, dirPath } of projectDirs) {
+      const projectPath = getProjectPath(dirPath);
+      const projectName = projectPath || dirName.replace(/^-/, '/').replace(/-/g, '/');
+      const shortName = (projectPath || dirName).split('/').filter(Boolean).slice(-2).join('/') || dirName;
+
+      const sessions = scanProjectSessions(dirPath);
+
+      for (const session of sessions) {
+        // Use the session's created date to place it on the timeline
+        const dateStr = session.created
+          ? new Date(session.created).toISOString().split('T')[0]
+          : (session.modified ? new Date(session.modified).toISOString().split('T')[0] : null);
+        if (!dateStr) continue;
+
+        const sessionDate = new Date(dateStr);
+        if (sessionDate < startDate || sessionDate > endDate) continue;
+
+        if (!dayMap.has(dateStr)) {
+          dayMap.set(dateStr, { sessionCount: 0, messageCount: 0, totalTokens: 0, sessions: [] });
+        }
+        const day = dayMap.get(dateStr);
+        day.sessionCount++;
+        day.messageCount += session.messageCount || 0;
+        day.sessions.push({
+          sessionId: session.sessionId,
+          projectId: dirName,
+          projectName: shortName,
+          title: session.customName || session.displayName || 'Untitled',
+          messageCount: session.messageCount || 0,
+        });
+      }
+    }
+
+    // Add Codex sessions to the timeline
+    const codexProjectsTimeline = getCodexProjects();
+    for (const cp of codexProjectsTimeline) {
+      const shortName = cp.projectPath.split('/').filter(Boolean).slice(-2).join('/') || cp.projectId;
+
+      for (const sess of cp.sessions) {
+        const meta = extractCodexSessionMeta(sess.filePath, sess.sessionId, sess.displayName);
+        if (!meta || meta.messageCount === 0) continue;
+
+        const dateStr = meta.created
+          ? new Date(meta.created).toISOString().split('T')[0]
+          : (meta.modified ? new Date(meta.modified).toISOString().split('T')[0] : null);
+        if (!dateStr) continue;
+
+        const sessionDate = new Date(dateStr);
+        if (sessionDate < startDate || sessionDate > endDate) continue;
+
+        if (!dayMap.has(dateStr)) {
+          dayMap.set(dateStr, { sessionCount: 0, messageCount: 0, totalTokens: 0, sessions: [] });
+        }
+        const day = dayMap.get(dateStr);
+        day.sessionCount++;
+        day.messageCount += meta.messageCount || 0;
+        day.sessions.push({
+          sessionId: sess.sessionId,
+          projectId: cp.projectId,
+          projectName: shortName,
+          title: meta.displayName || 'Untitled',
+          messageCount: meta.messageCount || 0,
+        });
+      }
+    }
+
+    // Aggregate token usage per day by scanning JSONL files
+    for (const { dirPath } of projectDirs) {
+      let files;
+      try {
+        files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
+      } catch { continue; }
+
+      for (const file of files) {
+        const filePath = path.join(dirPath, file);
+        let content;
+        try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
+
+        for (const line of content.split('\n')) {
+          if (!line.trim()) continue;
+          let obj;
+          try { obj = JSON.parse(line); } catch { continue; }
+
+          if (obj.type === 'assistant' && obj.message && obj.message.usage && obj.timestamp) {
+            const ts = new Date(obj.timestamp);
+            if (ts < startDate || ts > endDate) continue;
+            const dateStr = ts.toISOString().split('T')[0];
+            if (dayMap.has(dateStr)) {
+              const usage = obj.message.usage;
+              dayMap.get(dateStr).totalTokens += (usage.input_tokens || 0) + (usage.output_tokens || 0);
+            }
+          }
+        }
+      }
+    }
+
+    const days = Array.from(dayMap.entries())
+      .map(([date, data]) => ({ date, ...data }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({
+      days,
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 8. GET /api/tags
 // ---------------------------------------------------------------------------
 app.get('/api/tags', (req, res) => {
   try {
@@ -767,10 +1438,147 @@ app.get('/api/tags', (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 9. GET /api/prompts
+// ---------------------------------------------------------------------------
+app.get('/api/prompts', (req, res) => {
+  try {
+    const projectFilter = req.query.project || null;
+    const sessionFilter = req.query.session || null;
+    const page = parseInt(req.query.page, 10) || 1;
+    const pageSize = parseInt(req.query.pageSize, 10) || 50;
+
+    const projectDirs = listProjectDirs();
+    const targetDirs = projectFilter
+      ? projectDirs.filter(p => p.dirName === projectFilter)
+      : projectDirs;
+
+    const allPrompts = [];
+
+    for (const { dirName, dirPath } of targetDirs) {
+      const projectPath = getProjectPath(dirPath);
+      const projectName = projectPath || dirName.replace(/^-/, '/').replace(/-/g, '/');
+
+      let files;
+      try {
+        files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
+      } catch { continue; }
+
+      if (sessionFilter) {
+        files = files.filter(f => f === `${sessionFilter}.jsonl`);
+      }
+
+      for (const file of files) {
+        const sessionId = file.replace('.jsonl', '');
+        const filePath = path.join(dirPath, file);
+        let content;
+        try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
+
+        // Get session display name
+        const sidecar = readSidecarMeta(dirPath, sessionId);
+        let sessionName = sidecar.customName || null;
+
+        for (const line of content.split('\n')) {
+          if (!line.trim()) continue;
+
+          let obj;
+          try { obj = JSON.parse(line); } catch { continue; }
+
+          if (!sessionName && obj.type === 'system' && obj.subtype === 'local_command' &&
+              typeof obj.content === 'string' && obj.content.includes('Session renamed to:')) {
+             const match = obj.content.match(/Session renamed to:\\s*(.+?)(?:<|$)/);
+             if (match) sessionName = match[1].trim();
+          }
+
+          if (obj.type === 'user' && obj.message && !obj.isMeta) {
+            let text = null;
+            const c = obj.message.content;
+            if (typeof c === 'string') {
+              text = stripXmlTags(c);
+            } else if (Array.isArray(c)) {
+              text = stripXmlTags(
+                c.filter(b => b.type === 'text').map(b => b.text).join('\n')
+              );
+            }
+
+            if (text) {
+              allPrompts.push({
+                projectId: dirName,
+                projectName,
+                sessionId,
+                sessionName: sessionName || sessionId.substring(0, 8),
+                text,
+                timestamp: obj.timestamp || null,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Add Codex prompts
+    const codexProjectsPrompts = getCodexProjects();
+    const targetCodexPrompts = projectFilter
+      ? codexProjectsPrompts.filter(p => p.projectId === projectFilter)
+      : codexProjectsPrompts;
+
+    for (const cp of targetCodexPrompts) {
+      for (const sess of cp.sessions) {
+        if (sessionFilter && sess.sessionId !== sessionFilter) continue;
+
+        let content;
+        try { content = fs.readFileSync(sess.filePath, 'utf-8'); } catch { continue; }
+
+        for (const line of content.split('\n')) {
+          if (!line.trim()) continue;
+          let obj;
+          try { obj = JSON.parse(line); } catch { continue; }
+
+          if (obj.type === 'event_msg' && obj.payload && obj.payload.type === 'user_message') {
+            const text = typeof obj.payload.message === 'string'
+              ? obj.payload.message
+              : JSON.stringify(obj.payload.message);
+            if (text) {
+              allPrompts.push({
+                projectId: cp.projectId,
+                projectName: cp.projectPath,
+                sessionId: sess.sessionId,
+                sessionName: sess.displayName || sess.sessionId.substring(0, 8),
+                text,
+                timestamp: obj.timestamp || null,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Sort globally by timestamp, newest first
+    allPrompts.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+
+    const total = allPrompts.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const paginated = allPrompts.slice((page - 1) * pageSize, page * pageSize);
+
+    res.json({
+      prompts: paginated,
+      total,
+      page,
+      pageSize,
+      totalPages
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===========================================================================
 // Start server
 // ===========================================================================
 app.listen(PORT, () => {
-  console.log(`Claude History Viewer running at http://localhost:${PORT}`);
+  console.log(`CLI History Hub running at http://localhost:${PORT}`);
   console.log(`Reading data from: ${CLAUDE_DIR}`);
+  if (fs.existsSync(CODEX_DIR)) {
+    console.log(`Reading Codex data from: ${CODEX_DIR}`);
+  }
 });

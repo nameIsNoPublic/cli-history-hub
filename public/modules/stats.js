@@ -1,5 +1,5 @@
 /**
- * stats.js - Token usage statistics panel for Claude Code History Viewer
+ * stats.js - Token usage statistics panel for CLI History Hub
  *
  * Provides summary cards, a daily token usage bar chart (canvas-based),
  * and breakdown tables by project and model (#5).
@@ -13,6 +13,17 @@ window.Stats = (function () {
   let statsCards;
   let tokenChart;
   let statsBreakdown;
+
+  const MODEL_PRICING = [
+    { regex: /opus/i, in: 15, out: 75, color: '#a371f7' },
+    { regex: /sonnet/i, in: 3, out: 15, color: '#58a6ff' },
+    { regex: /haiku/i, in: 0.25, out: 1.25, color: '#d29922' },
+    { regex: /synthetic/i, in: 0, out: 0, color: '#8b949e' }
+  ];
+  const DEFAULT_PRICING = { in: 3, out: 15, color: '#7ee787' };
+
+  let modelChartMode = 'cost'; // 'cost' or 'tokens'
+  let cachedByModelData = [];
 
   /**
    * Initialize the stats module: cache DOM elements, bind listeners.
@@ -304,7 +315,7 @@ window.Stats = (function () {
       html += '<tbody>';
       byProject.forEach(function (p) {
         html +=
-          '<tr>' +
+          '<tr class="clickable-row" data-project="' + escapeHtml(p.projectId || '') + '">' +
             '<td title="' + escapeHtml(p.projectName || '') + '">' +
               escapeHtml(shortenProjectName(p.projectName || p.projectId || '')) +
             '</td>' +
@@ -316,28 +327,229 @@ window.Stats = (function () {
     }
     html += '</div>';
 
-    // By Model table
-    html += '<div class="breakdown-section">';
-    html += '<h3>By Model</h3>';
+    // Model Analytics
+    cachedByModelData = byModel;
+    html += '<div class="breakdown-section model-analytics">';
+    html += '<div class="model-analytics-header">';
+    html += '<h3>Model Analytics</h3>';
+    if (byModel.length > 0) {
+      html += '<div class="chart-toggle">';
+      html += '<button id="btnCostMode" class="toggle-btn ' + (modelChartMode === 'cost' ? 'active' : '') + '">Cost ($)</button>';
+      html += '<button id="btnTokensMode" class="toggle-btn ' + (modelChartMode === 'tokens' ? 'active' : '') + '">Tokens</button>';
+      html += '</div>';
+    }
+    html += '</div>';
+
     if (byModel.length === 0) {
       html += '<p class="no-data">No model data</p>';
     } else {
-      html += '<table class="breakdown-table">';
-      html += '<thead><tr><th>Model</th><th>Messages</th><th>Output Tokens</th></tr></thead>';
-      html += '<tbody>';
-      byModel.forEach(function (m) {
-        html +=
-          '<tr>' +
-            '<td>' + escapeHtml(m.model || 'unknown') + '</td>' +
-            '<td>' + formatNumber(m.count || 0) + '</td>' +
-            '<td>' + formatNumber(m.output || 0) + '</td>' +
-          '</tr>';
-      });
-      html += '</tbody></table>';
+      html += '<div class="chart-container-donut">';
+      html += '<div class="donut-canvas-wrapper">';
+      html += '<canvas id="modelPieChart"></canvas>';
+      html += '</div>';
+      html += '<div id="modelLegend" class="model-legend"></div>';
+      html += '</div>';
     }
     html += '</div>';
 
     statsBreakdown.innerHTML = html;
+
+    if (byModel.length > 0) {
+      drawModelDoughnut();
+      
+      var btnCost = document.getElementById('btnCostMode');
+      var btnTokens = document.getElementById('btnTokensMode');
+      
+      if (btnCost && btnTokens) {
+        btnCost.addEventListener('click', function() {
+          if (modelChartMode === 'cost') return;
+          modelChartMode = 'cost';
+          btnCost.classList.add('active');
+          btnTokens.classList.remove('active');
+          drawModelDoughnut();
+        });
+        btnTokens.addEventListener('click', function() {
+          if (modelChartMode === 'tokens') return;
+          modelChartMode = 'tokens';
+          btnTokens.classList.add('active');
+          btnCost.classList.remove('active');
+          drawModelDoughnut();
+        });
+      }
+    }
+
+    // Bind click events to project rows
+    var rows = statsBreakdown.querySelectorAll('.clickable-row');
+    rows.forEach(function(row) {
+      row.addEventListener('click', function() {
+        var pId = row.getAttribute('data-project');
+        if (pId) {
+          if (window.App && typeof window.App.selectProject === 'function') {
+            window.App.selectProject(pId);
+          } else {
+            window.location.hash = '#/project/' + encodeURIComponent(pId);
+          }
+        }
+      });
+    });
+  }
+
+  // Cached slices for hover redraws (avoid recalculating on every hover)
+  var cachedSlices = [];
+  var cachedTotal = 0;
+
+  /**
+   * Build slices data from cachedByModelData and current mode.
+   */
+  function buildSlices() {
+    var slices = [];
+    var totalVal = 0;
+    cachedByModelData.forEach(function(m) {
+      var modelName = m.model || 'unknown';
+      var pricing = DEFAULT_PRICING;
+      for (var i = 0; i < MODEL_PRICING.length; i++) {
+        if (MODEL_PRICING[i].regex.test(modelName)) {
+          pricing = MODEL_PRICING[i];
+          break;
+        }
+      }
+
+      var val = 0;
+      var labelVal = '';
+      if (modelChartMode === 'cost') {
+        var costIn = ((m.input || 0) / 1000000) * pricing.in;
+        var costOut = ((m.output || 0) / 1000000) * pricing.out;
+        val = costIn + costOut;
+        labelVal = '$' + val.toFixed(2);
+      } else {
+        val = (m.input || 0) + (m.output || 0);
+        labelVal = formatShortNumber(val) + ' Tkns';
+      }
+
+      if (val > 0) {
+        slices.push({ model: modelName, val: val, labelVal: labelVal, color: pricing.color });
+        totalVal += val;
+      }
+    });
+    slices.sort(function(a, b) { return b.val - a.val; });
+    cachedSlices = slices;
+    cachedTotal = totalVal;
+  }
+
+  /**
+   * Draw the Doughnut Chart on Canvas (only canvas, no DOM rebuild).
+   */
+  function drawDoughnutCanvas(hoverIndex) {
+    var canvas = document.getElementById('modelPieChart');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+
+    // Handle HiDPI displays
+    var dpr = window.devicePixelRatio || 1;
+    var displaySize = 180;
+    canvas.width = displaySize * dpr;
+    canvas.height = displaySize * dpr;
+    ctx.scale(dpr, dpr);
+
+    var cx = displaySize / 2;
+    var cy = displaySize / 2;
+    var radius = cx - 5;
+    var innerRadius = radius * 0.6;
+
+    ctx.clearRect(0, 0, displaySize, displaySize);
+
+    if (cachedTotal === 0) {
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '14px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('No Data', cx, cy);
+      return;
+    }
+
+    var startAngle = -Math.PI / 2;
+    cachedSlices.forEach(function(slice, idx) {
+      var sliceAngle = (slice.val / cachedTotal) * 2 * Math.PI;
+      var endAngle = startAngle + sliceAngle;
+      var isFaded = hoverIndex !== undefined && hoverIndex !== idx;
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, startAngle, endAngle);
+      ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
+      ctx.closePath();
+
+      ctx.fillStyle = slice.color;
+      ctx.globalAlpha = isFaded ? 0.2 : 1.0;
+      ctx.fill();
+
+      ctx.strokeStyle = '#0d1117';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      startAngle = endAngle;
+    });
+
+    ctx.globalAlpha = 1.0;
+  }
+
+  /**
+   * Build legend DOM and bind hover events (called once per data change).
+   */
+  function buildLegend() {
+    var legendContainer = document.getElementById('modelLegend');
+    if (!legendContainer) return;
+
+    var html = '';
+    cachedSlices.forEach(function(slice, idx) {
+      var pct = cachedTotal > 0 ? ((slice.val / cachedTotal) * 100).toFixed(1) + '%' : '0%';
+      html += '<div class="legend-item" data-idx="' + idx + '">';
+      html += '<div class="legend-color" style="background-color:' + slice.color + ';"></div>';
+      html += '<div class="legend-info">';
+      html += '<span class="legend-model">' + escapeHtml(slice.model) + '</span>';
+      html += '<span class="legend-detail">' + slice.labelVal + ' (' + pct + ')</span>';
+      html += '</div></div>';
+    });
+    legendContainer.innerHTML = html;
+
+    // Bind hover: only update canvas + opacity, no DOM rebuild
+    var items = legendContainer.querySelectorAll('.legend-item');
+    items.forEach(function(item) {
+      item.addEventListener('mouseenter', function() {
+        var idx = parseInt(item.getAttribute('data-idx'), 10);
+        drawDoughnutCanvas(idx);
+        updateLegendHighlight(idx);
+      });
+      item.addEventListener('mouseleave', function() {
+        drawDoughnutCanvas();
+        updateLegendHighlight();
+      });
+    });
+  }
+
+  /**
+   * Update legend item opacity without rebuilding DOM.
+   */
+  function updateLegendHighlight(hoverIndex) {
+    var legendContainer = document.getElementById('modelLegend');
+    if (!legendContainer) return;
+    var items = legendContainer.querySelectorAll('.legend-item');
+    items.forEach(function(item) {
+      var idx = parseInt(item.getAttribute('data-idx'), 10);
+      if (hoverIndex !== undefined && hoverIndex !== idx) {
+        item.style.opacity = '0.4';
+      } else {
+        item.style.opacity = '1';
+      }
+    });
+  }
+
+  /**
+   * Full redraw: rebuild slices, draw canvas, rebuild legend.
+   */
+  function drawModelDoughnut() {
+    buildSlices();
+    drawDoughnutCanvas();
+    buildLegend();
   }
 
   /**

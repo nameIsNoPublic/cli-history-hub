@@ -1,7 +1,7 @@
 {
-  "name": "claude-history-viewer",
+  "name": "cli-history-hub",
   "version": "1.0.0",
-  "description": "Claude Code conversation history viewer",
+  "description": "Browse and manage conversation history from Claude Code CLI and Codex CLI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

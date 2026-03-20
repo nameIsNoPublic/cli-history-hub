@@ -1,10 +1,11 @@
 /**
- * router.js - Hash-based URL routing for Claude Code History Viewer
+ * router.js - Hash-based URL routing for CLI History Hub
  *
  * Route format:
  *   #/                                  -> welcome view
  *   #/project/{projectId}               -> session list
  *   #/project/{projectId}/session/{id}  -> chat detail
+ *   #/timeline                           -> timeline heatmap
  *   #/stats                             -> stats (all projects)
  *   #/stats/{projectId}                 -> stats (specific project)
  */
@@ -29,6 +30,11 @@ window.Router = (function () {
       return { view: 'welcome', projectId: null, sessionId: null };
     }
 
+    // #/timeline
+    if (segments[0] === 'timeline') {
+      return { view: 'timeline', projectId: null, sessionId: null };
+    }
+
     // #/stats  or  #/stats/{projectId}
     if (segments[0] === 'stats') {
       return {
@@ -36,6 +42,17 @@ window.Router = (function () {
         projectId: segments[1] || null,
         sessionId: null,
       };
+    }
+
+    // #/prompts  or  #/prompts/project/{projectId}  or  #/prompts/session/{projectId}/{sessionId}
+    if (segments[0] === 'prompts') {
+      if (segments[1] === 'project' && segments[2]) {
+        return { view: 'prompts', projectId: decodeURIComponent(segments[2]), sessionId: null };
+      }
+      if (segments[1] === 'session' && segments[2] && segments[3]) {
+        return { view: 'prompts', projectId: decodeURIComponent(segments[2]), sessionId: decodeURIComponent(segments[3]) };
+      }
+      return { view: 'prompts', projectId: null, sessionId: null };
     }
 
     // #/project/{projectId}  or  #/project/{projectId}/session/{sessionId}
@@ -77,11 +94,27 @@ window.Router = (function () {
           await App.openSession(route.sessionId);
           break;
 
+        case 'timeline':
+          if (window.Timeline && window.Timeline.show) {
+            window.Timeline.show();
+          } else {
+            App.showView('timeline');
+          }
+          break;
+
         case 'stats':
           if (window.Stats && window.Stats.show) {
             window.Stats.show(route.projectId || undefined);
           } else {
             App.showView('stats');
+          }
+          break;
+
+        case 'prompts':
+          if (window.Prompts && window.Prompts.activate) {
+            window.Prompts.activate(route.projectId || '', route.sessionId || '');
+          } else {
+            App.showView('prompts');
           }
           break;
 
