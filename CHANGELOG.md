@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.2.0](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.2.0) - 2026-03-21
+
+### Added
+
+- Resume session: one-click open system terminal to resume CLI sessions (Claude `--resume` / Codex `resume`), with cross-platform support for macOS, Linux and Windows (thanks @raintear94)
+
 ## [v1.1.0](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.1.0) - 2026-03-20
 
 ### Added
