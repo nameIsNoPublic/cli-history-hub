@@ -63,21 +63,35 @@
 
 ### 列表内搜索
 
-在会话列表页面的文本输入框中实时筛选会话。
+在会话列表页面的文本输入框中实时筛选会话。搜索分两级：即时本地匹配和延迟 API 匹配。
 
-**搜索范围（拼接后匹配）：**
+**第一级：即时匹配（本地）**
+
+搜索范围（拼接后匹配）：
 - `displayName`
 - `firstPrompt`
 - `customName`
 - `tags`（所有标签拼接）
 
-**搜索方式：**
+搜索方式：
 - 实时触发（`input` 事件，无防抖）
 - 大小写不敏感的 `indexOf` 匹配
 - 与分支筛选可叠加（先筛分支，再筛文本）
 
+**第二级：延迟匹配（API 异步搜索消息正文）**
+
+搜索范围：
+- 会话中所有消息的正文内容（通过 `/api/search` 后端全文搜索）
+
+搜索方式：
+- 300ms 防抖后触发（`_filterSearchTimer` 控制）
+- 调用 `GET /api/search?q=keyword&project=pid` 搜索消息内容
+- 使用版本号 `_filterSearchVersion` 防止过期请求覆盖新结果
+- API 返回的匹配会话与第一级本地匹配结果合并去重后重新渲染列表
+
 **交互：**
-- 输入时立即过滤，更新会话卡片和数量徽章
+- 输入时立即显示本地匹配结果，300ms 后 API 结果补充进来
+- 更新会话卡片和数量徽章
 - 切换项目时自动清空搜索框
 
 ## 涉及的代码
@@ -95,7 +109,9 @@
 | 前端 | public/modules/chat-view.js | `goToMatch()` - 在匹配项间跳转，更新计数器和焦点高亮 |
 | 前端 | public/index.html | `#chatSearchBar` - 搜索条 HTML（含 `#chatSearchMatchCase`、`#chatSearchWholeWord`、`#chatSearchRegex` 选项按钮） |
 | 前端 | public/style.css | `.chat-search-bar`, `.chat-search-opts`, `.search-opt-btn`, `mark.chat-search-match` - 搜索条、选项按钮和高亮样式 |
-| 前端 | public/app.js:345-382 | `applyFilters()` - 列表内搜索 + 分支筛选 |
+| 前端 | public/app.js:345-396 | `applyFilters()` - 列表内搜索（本地即时匹配 + API 延迟匹配）+ 分支筛选 |
+| 前端 | public/app.js | `_filterSearchTimer` - 列表内搜索 API 调用的防抖定时器 |
+| 前端 | public/app.js | `_filterSearchVersion` - 防止过期 API 响应覆盖新结果的版本号 |
 | 后端 | server.js:493-596 | `GET /api/search` |
 
 ## API 接口
@@ -123,18 +139,18 @@
 2. 在搜索弹窗中输入框下方显示历史列表
 3. 点击历史项自动填充并执行搜索
 
-### 如果要加列表内搜索的防抖
+### 如果要给列表内本地匹配也加防抖
 
-1. 修改 `app.js` 中 `sessionSearchInput` 的 `input` 事件处理
-2. 添加 `setTimeout` 防抖（建议 150-200ms）
-3. 当前无防抖在小数据量下没有性能问题
+1. API 异步搜索已有 300ms 防抖（`_filterSearchTimer`）
+2. 本地匹配目前仍无防抖（即时响应），在小数据量下没有性能问题
+3. 如需加防抖，修改 `app.js` 中 `sessionSearchInput` 的 `input` 事件处理，添加 `setTimeout`（建议 100-150ms，比 API 搜索短以保持即时感）
 
 ## 已知问题 / TODO
 
 - [ ] 全局搜索不支持正则表达式
 - [ ] 全局搜索结果没有分页（固定最多 50 条）
 - [ ] 全局搜索没有搜索历史
-- [ ] 列表内搜索没有防抖
+- [x] ~~列表内搜索没有防抖~~ — 部分解决：本地匹配仍即时触发，API 搜索已加 300ms 防抖
 - [x] ~~没有在当前对话内搜索的功能~~ — 已实现会话内搜索（Cmd+F）
 
 ### 最近优化记录 (Recent Updates)

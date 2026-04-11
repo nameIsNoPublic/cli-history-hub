@@ -15,9 +15,9 @@ node server.js # 启动服务，http://localhost:3456
 ## 项目结构
 
 ```
-server.js                 # 全部后端逻辑（Express + 9 个 API + JSONL 解析 + 缓存）
+server.js                 # 全部后端逻辑（Express + 10 个 API + JSONL 解析 + 缓存）
 public/
-  index.html              # SPA 入口（4 视图 + 4 弹窗）
+  index.html              # SPA 入口（6 视图 + 6 弹窗）
   style.css               # 全局 CSS，暗色主题
   app.js                  # 主应用（window.App）：状态管理、视图切换、项目/会话列表
   modules/

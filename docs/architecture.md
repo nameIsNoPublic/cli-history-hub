@@ -7,7 +7,7 @@ CLI History Hub 是一个本地 Web 应用，用于浏览和管理 Claude Code C
 ## 关联功能
 
 - [数据存储](data-storage.md) - 数据层的详细设计
-- [API 参考](api-reference.md) - 9 个后端 API 端点的完整文档
+- [API 参考](api-reference.md) - 10 个后端 API 端点的完整文档
 - [浏览与导航](browse-and-navigate.md) - 前端核心交互流程
 - [对话详情](conversation-detail.md) - 消息渲染模块
 - [搜索](search.md) - 搜索模块
@@ -31,10 +31,10 @@ CLI History Hub 是一个本地 Web 应用，用于浏览和管理 Claude Code C
 
 ```
 claude-history-viewer/
-  server.js                   # 后端：Express 服务器 + 9 个 API + 数据解析逻辑
+  server.js                   # 后端：Express 服务器 + 10 个 API + 数据解析逻辑
   package.json                # 项目配置，只有 express 一个依赖
   public/                     # 前端静态文件
-    index.html                # SPA 入口页面，4 个视图 + 4 个弹窗
+    index.html                # SPA 入口页面，6 个视图 + 6 个弹窗
     style.css                 # 全局样式
     favicon.svg               # 图标
     app.js                    # 主应用：状态管理、视图切换、项目/会话列表
@@ -44,6 +44,9 @@ claude-history-viewer/
       search.js                # 全局搜索弹窗
       stats.js                 # 统计面板 + 图表
       features.js              # 重命名/标签/收藏/导出
+      diff-view.js             # 文件变更 Diff 全屏 Modal
+      timeline.js              # 时间线热力图
+      prompts.js               # Prompt Library
   docs/                       # 文档（本目录）
 ```
 
@@ -99,7 +102,7 @@ server.js
   │   ├── extractCodexSessionMeta()# 提取 Codex 会话元数据
   │   └── parseCodexMessages()     # 解析 Codex 消息为内部格式
   │
-  ├── API 路由（9 个）
+  ├── API 路由（10 个）
   │   ├── GET  /api/projects
   │   ├── GET  /api/projects/:pid/sessions-full
   │   ├── GET  /api/projects/:pid/sessions/:sid
@@ -108,7 +111,8 @@ server.js
   │   ├── GET  /api/stats
   │   ├── GET  /api/timeline
   │   ├── GET  /api/tags
-  │   └── GET  /api/prompts
+  │   ├── GET  /api/prompts
+  │   └── POST /api/open-terminal
   │
   └── 静态文件服务
       └── express.static('public/')
@@ -165,7 +169,7 @@ server.js
 
 ## 前端视图结构
 
-`index.html` 中有 4 个视图（同时只显示一个）和 4 个弹窗：
+`index.html` 中有 6 个视图（同时只显示一个）和 6 个弹窗：
 
 **视图：**
 | ID | 对应 | 显示条件 |
@@ -174,6 +178,8 @@ server.js
 | `sessionListView` | 会话列表 | 路由 `#/project/{pid}` |
 | `chatView` | 对话详情 | 路由 `#/project/{pid}/session/{sid}` |
 | `statsView` | 统计面板 | 路由 `#/stats` |
+| `timelineView` | 时间线热力图 | 路由 `#/timeline` |
+| `promptsView` | Prompt Library | 路由 `#/prompts` |
 
 **弹窗：**
 | ID | 功能 | 触发 |
@@ -182,6 +188,8 @@ server.js
 | `tagModal` | 管理标签 | 详情页的标签按钮 |
 | `exportModal` | 导出对话 | 详情页的导出按钮 |
 | `searchModal` | 全局搜索 | 侧边栏搜索按钮 / Cmd+K |
+| `diffModal` | 文件变更 Diff | 详情页的 Files 按钮 |
+| `deleteModal` | 删除会话确认 | 详情页的删除按钮 |
 
 ## 涉及的代码
 

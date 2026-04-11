@@ -73,7 +73,7 @@ claude-history-viewer/
   server.js                       # 后端：Express 服务器 + API + 数据解析
   package.json                    # 项目配置（唯一依赖：express）
   public/
-    index.html                    # SPA 入口（5 视图 + 4 弹窗）
+    index.html                    # SPA 入口（6 视图 + 6 弹窗）
     style.css                     # 全局样式
     app.js                        # 主应用（状态管理、视图切换、列表渲染）
     modules/

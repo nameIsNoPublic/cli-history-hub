@@ -187,7 +187,7 @@ cli-history-hub/
   package.json              # 项目配置（唯一依赖：express）
   LICENSE                   # CC BY-NC-SA 4.0
   public/
-    index.html              # SPA 入口（7 视图 + 5 弹窗）
+    index.html              # SPA 入口（6 视图 + 6 弹窗）
     style.css               # 全局样式（CSS 变量 + 暗色/浅色主题）
     app.js                  # 主应用（状态管理、视图切换、事件绑定）
     modules/

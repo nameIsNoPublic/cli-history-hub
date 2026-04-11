@@ -110,11 +110,13 @@
 
 ### 列表内搜索
 
-会话列表头部的文本输入框，实时过滤会话。
+会话列表头部的文本输入框，实时过滤会话。支持两级搜索：本地元数据匹配 + 异步消息内容搜索。
 
-**搜索范围：** `displayName` + `firstPrompt` + `customName` + `tags`
+**搜索范围：**
+1. **即时匹配（本地）：** `displayName` + `firstPrompt` + `customName` + `tags`
+2. **延迟匹配（API）：** 调用 `/api/search` 搜索会话消息正文内容，将命中的 session 补充进结果
 
-**实现：** 输入时触发 `input` 事件 → `applyFilters()` → 将搜索词与拼接的文本进行 `indexOf` 匹配。分支筛选和文本搜索可叠加。
+**实现：** 输入时触发 `input` 事件 → `applyFilters()` → 先做本地元数据 `indexOf` 匹配并立即渲染，同时 300ms 防抖后异步调用 `/api/search`，将内容匹配到的 session 合并去重后重新渲染。分支筛选和文本搜索可叠加。用 `_filterSearchVersion` 版本号防止过期的异步结果覆盖新的搜索。
 
 ### URL 路由
 
@@ -151,7 +153,7 @@
 | 前端 | public/app.js:226-258 | `loadProjects()`, `renderProjectList()` |
 | 前端 | public/app.js:264-313 | `selectProject()`, `loadSessions()` |
 | 前端 | public/app.js:319-339 | `populateBranchFilter()` |
-| 前端 | public/app.js:345-382 | `applyFilters()` |
+| 前端 | public/app.js:345-396 | `applyFilters()`, `_filterSearchTimer`, `_filterSearchVersion` |
 | 前端 | public/app.js:388-508 | `renderSessionList()`, `renderTimeGroup()`, `createSessionCard()` |
 | 前端 | public/app.js:159-221 | `GENERIC_NAMES`, `smartTitle()`, `getTimeGroup()`, `TIME_GROUP_ORDER` |
 | 前端 | public/app.js | `refreshCurrentView()`, `setupVisibilityRefresh()` |

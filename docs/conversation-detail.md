@@ -153,6 +153,22 @@
 - `Escape` 键关闭弹窗
 - 支持暗色/浅色主题（浅色下 diff 文字颜色自动适配）
 
+### 隐藏纯工具消息
+
+对话头部有一个 "Hide Tools" 按钮，可以切换隐藏/显示"纯工具调用消息"（只有 tool_use 块、没有任何文字内容的 assistant 消息）。
+
+**行为：**
+- 默认隐藏（首次使用时），按钮绿色高亮表示隐藏中
+- 点击切换：隐藏 ↔ 显示
+- 状态通过 `localStorage`（key: `hideToolOnly`）持久化
+- 通过 CSS 类 `hide-tool-only` 加到 `#chatView`，配合 `.tool-only-turn` 类实现隐藏
+
+**涉及的代码：**
+- `index.html`：`#hideToolOnlyBtn` 按钮
+- `chat-view.js:createAssistantTurn()` — 检测纯 tool 消息，添加 `.tool-only-turn` 类
+- `app.js:initHideToolOnly()` / `toggleHideToolOnly()` — 初始化和切换逻辑
+- `style.css`：`#hideToolOnlyBtn.active` 样式 + `#chatView.hide-tool-only .tool-only-turn` 隐藏规则
+
 ### 对话头部信息
 
 详情页头部包含：
@@ -160,7 +176,7 @@
 - 收藏星标按钮
 - 会话标题（使用 `smartTitle` 逻辑）
 - 重命名按钮
-- Resume 按钮（"▶ Resume"，点击打开系统终端恢复会话，Claude 执行 `claude --resume`，Codex 执行 `codex resume`）+ Prompts 按钮（Toggle 模式：隐藏 AI 回复，只显示 USER 消息）+ Files 按钮（显示文件变更数量角标）+ 标签按钮 + 导出按钮
+- Resume 按钮（"▶ Resume"，点击打开系统终端恢复会话，Claude 执行 `claude --resume`，Codex 执行 `codex resume`）+ Prompts 按钮（Toggle 模式：隐藏 AI 回复，只显示 USER 消息）+ Files 按钮（显示文件变更数量角标）+ Hide Tools 按钮（隐藏纯工具调用消息）+ 标签按钮 + 导出按钮
 - 元信息行：日期、消息数、git 分支
 - 标签展示区
 
