@@ -58,6 +58,7 @@
     dom.refreshSessionsBtn = $('#refreshSessionsBtn');
     dom.resumeBtn = $('#resumeBtn');
     dom.refreshChatBtn = $('#refreshChatBtn');
+    dom.hideToolOnlyBtn = $('#hideToolOnlyBtn');
     dom.toast = $('#toast');
     dom.themeToggleBtn = $('#themeToggleBtn');
   }
@@ -405,6 +406,9 @@
   // Session search & filter (#4)
   // =========================================================================
 
+  var _filterSearchTimer = null;
+  var _filterSearchVersion = 0;
+
   function applyFilters() {
     var searchTerm = (dom.sessionSearchInput ? dom.sessionSearchInput.value : '').trim().toLowerCase();
     var branchValue = dom.branchFilter ? dom.branchFilter.value : '';
@@ -417,8 +421,9 @@
     }
 
     // Text search filter: match against displayName, firstPrompt, customName, tags
+    var localMatched = filtered;
     if (searchTerm) {
-      filtered = filtered.filter(function (s) {
+      localMatched = filtered.filter(function (s) {
         var parts = [
           s.displayName || '',
           s.firstPrompt || '',
@@ -434,14 +439,58 @@
       });
     }
 
-    state.filteredSessions = filtered;
+    state.filteredSessions = localMatched;
 
     // Update session count badge
     if (dom.sessionCount) {
-      dom.sessionCount.textContent = filtered.length;
+      dom.sessionCount.textContent = localMatched.length;
     }
 
     renderSessionList();
+
+    // Also search message content via API (debounced)
+    if (searchTerm && state.currentProjectId) {
+      if (_filterSearchTimer) clearTimeout(_filterSearchTimer);
+      var version = ++_filterSearchVersion;
+      _filterSearchTimer = setTimeout(function () {
+        api('/api/search?q=' + encodeURIComponent(searchTerm) + '&project=' + encodeURIComponent(state.currentProjectId))
+          .then(function (data) {
+            if (version !== _filterSearchVersion) return;
+            var results = data && data.results ? data.results : data;
+            if (!results || !results.length) return;
+
+            // Collect sessionIds that matched via content search
+            var contentMatchIds = {};
+            for (var i = 0; i < results.length; i++) {
+              contentMatchIds[results[i].sessionId] = true;
+            }
+
+            // Find sessions in current list that matched content but not metadata
+            var localMatchedIds = {};
+            for (var j = 0; j < localMatched.length; j++) {
+              localMatchedIds[localMatched[j].sessionId] = true;
+            }
+
+            var extras = [];
+            for (var k = 0; k < filtered.length; k++) {
+              if (contentMatchIds[filtered[k].sessionId] && !localMatchedIds[filtered[k].sessionId]) {
+                extras.push(filtered[k]);
+              }
+            }
+
+            if (extras.length > 0) {
+              state.filteredSessions = localMatched.concat(extras);
+              if (dom.sessionCount) {
+                dom.sessionCount.textContent = state.filteredSessions.length;
+              }
+              renderSessionList();
+            }
+          })
+          .catch(function () { /* ignore search errors */ });
+      }, 300);
+    } else {
+      _filterSearchVersion++;
+    }
   }
 
   // =========================================================================
@@ -868,6 +917,42 @@
     if (bar) bar.classList.add('hidden');
   }
 
+  // =========================================================================
+  // Hide tool-only messages toggle
+  // =========================================================================
+
+  var _hideToolOnly = localStorage.getItem('hideToolOnly') !== 'false';
+
+  function initHideToolOnly() {
+    var chatView = document.getElementById('chatView');
+    var btn = dom.hideToolOnlyBtn;
+    if (!chatView) return;
+
+    if (_hideToolOnly) {
+      chatView.classList.add('hide-tool-only');
+      if (btn) btn.classList.add('active');
+    } else {
+      chatView.classList.remove('hide-tool-only');
+      if (btn) btn.classList.remove('active');
+    }
+  }
+
+  function toggleHideToolOnly() {
+    _hideToolOnly = !_hideToolOnly;
+    localStorage.setItem('hideToolOnly', _hideToolOnly ? 'true' : 'false');
+    var chatView = document.getElementById('chatView');
+    var btn = dom.hideToolOnlyBtn;
+    if (!chatView) return;
+
+    if (_hideToolOnly) {
+      chatView.classList.add('hide-tool-only');
+      if (btn) btn.classList.add('active');
+    } else {
+      chatView.classList.remove('hide-tool-only');
+      if (btn) btn.classList.remove('active');
+    }
+  }
+
   async function refreshCurrentSession() {
     if (state.currentProjectId && state.currentSessionId) {
       await openSession(state.currentSessionId);
@@ -1041,6 +1126,9 @@
     }
     if (dom.sessionPromptsBtn) {
       dom.sessionPromptsBtn.addEventListener('click', togglePromptsOnly);
+    }
+    if (dom.hideToolOnlyBtn) {
+      dom.hideToolOnlyBtn.addEventListener('click', toggleHideToolOnly);
     }
     var promptsOnlyDismiss = document.getElementById('promptsOnlyDismiss');
     if (promptsOnlyDismiss) {
@@ -1244,6 +1332,9 @@
 
     // Initialize sidebar splitter
     initSplitter();
+
+    // Initialize hide tool-only toggle
+    initHideToolOnly();
 
     // Load project list
     await loadProjects();

@@ -474,6 +474,20 @@ window.ChatView = (function () {
     div.className = 'message-turn';
     div.dataset.role = 'assistant';
 
+    // Detect tool-only turns (no text content, only tool_use/thinking blocks)
+    var hasText = false;
+    if (msg.blocks && msg.blocks.length > 0) {
+      for (var i = 0; i < msg.blocks.length; i++) {
+        if (msg.blocks[i].type === 'text' && msg.blocks[i].text && msg.blocks[i].text.trim()) {
+          hasText = true;
+          break;
+        }
+      }
+    }
+    if (!hasText) {
+      div.classList.add('tool-only-turn');
+    }
+
     var modelName = msg.model || 'Claude';
     var timeStr = msg.timestamp ? formatTime(msg.timestamp) : '';
     var totalOutputTokens = (msg.usage && msg.usage.output_tokens) ? msg.usage.output_tokens : 0;

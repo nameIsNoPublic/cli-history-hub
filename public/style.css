@@ -2841,6 +2841,24 @@ mark.flash-highlight {
   border-color: var(--accent);
 }
 
+/* === Hide Tool-Only Toggle === */
+
+#hideToolOnlyBtn.active {
+  background: var(--tool-bg);
+  color: var(--success);
+  border-color: var(--tool-border);
+}
+
+#hideToolOnlyBtn.active:hover {
+  background: #1f2e1a;
+  border-color: var(--success);
+}
+
+/* When tool-only hiding is active, collapse those turns */
+#chatView.hide-tool-only .message-turn.tool-only-turn {
+  display: none;
+}
+
 /* === Prompts Library === */
 .prompts-header {
   flex-wrap: wrap;
