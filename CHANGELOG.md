@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.4.0](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.4.0) - 2026-04-11
+
+### Added
+
+- Filter Sessions now searches message content in addition to metadata, using async API calls with 300ms debounce
+- Hide Tools toggle button in chat detail header to hide assistant messages that contain only tool calls, reducing visual noise in tool-heavy conversations (state persists via localStorage)
+
 ## [v1.3.0](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.3.0) - 2026-03-26
 
 ### Added
