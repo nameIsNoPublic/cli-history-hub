@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.4.1](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.4.1) - 2026-04-14
+
+### Fixed
+
+- Filter out internal Claude Code sessions (warmup and summary generation) from all views — session list, search, stats, timeline, and prompts
+
 ## [v1.4.0](https://github.com/nameIsNoPublic/cli-history-hub/releases/tag/v1.4.0) - 2026-04-11
 
 ### Added
