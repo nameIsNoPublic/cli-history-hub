@@ -108,6 +108,24 @@ Codex 的 JSONL 文件位于 `~/.codex/sessions/<year>/<month>/<day>/rollout-<ti
 - Codex 不记录 `gitBranch`
 - Codex 没有 `isMeta` 标记，没有 `system/local_command` 类型
 
+### 内部会话过滤
+
+Claude Code 会产生一些内部会话（非用户真正的对话），在会话列表、搜索、统计、时间线、Prompt 等所有端点中自动过滤：
+
+| 类型 | 检测规则 | 说明 |
+|------|---------|------|
+| Warmup | `firstPrompt` 为 "warmup"（不区分大小写） | Claude Code 启动时发送的预热请求 |
+| Summary | `firstPrompt` 以 "Context: This summary will be shown in a list" 开头 | Claude Code 内部生成对话摘要的请求 |
+
+**检测函数：**
+- `isInternalFirstPrompt(text)` — 检查 firstPrompt 文本是否为内部会话
+- `checkInternalContent(content)` — 从 JSONL 内容中提取第一条用户消息并检测
+
+**过滤位置：**
+- `extractSessionMeta()` 返回 `isInternal` 标志
+- `scanProjectSessions()` 过滤 `isInternal` 会话
+- 搜索、统计、时间线、Prompt 端点使用 `checkInternalContent()` 过滤
+
 ### XML 标签清理
 
 用户消息文本中可能包含 Claude Code 注入的 XML 标签，解析时会被去除：
@@ -174,10 +192,11 @@ const XML_STRIP_TAGS = [
 |------|------|--------------|
 | 后端 | server.js:17 | `sessionCache = new Map()` |
 | 后端 | server.js:22-38 | `XML_STRIP_TAGS`, `stripXmlTags()` |
-| 后端 | server.js:43-51 | `readSidecarMeta()` |
-| 后端 | server.js:56-63 | `writeSidecarMeta()` |
-| 后端 | server.js:68-147 | `extractSessionMeta()` |
-| 后端 | server.js:152-188 | `scanProjectSessions()` - 含缓存逻辑 |
+| 后端 | server.js:48-72 | `isInternalFirstPrompt()`, `checkInternalContent()` — 内部会话检测 |
+| 后端 | server.js:74-82 | `readSidecarMeta()` |
+| 后端 | server.js:87-94 | `writeSidecarMeta()` |
+| 后端 | server.js:99-178 | `extractSessionMeta()` — 含 `isInternal` 标志 |
+| 后端 | server.js:183-222 | `scanProjectSessions()` - 含缓存逻辑 + 内部会话过滤 |
 | 后端 | server.js:193-212 | `getProjectPath()` |
 | 后端 | server.js:217-277 | `parseSessionMessages()` |
 | 后端 | server.js:279-296 | `formatUserMessage()` |

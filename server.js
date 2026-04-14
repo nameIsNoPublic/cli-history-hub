@@ -46,6 +46,38 @@ function stripXmlTags(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Detect internal Claude Code sessions (warmup, summary generation)
+// ---------------------------------------------------------------------------
+function isInternalFirstPrompt(text) {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.toLowerCase() === 'warmup') return true;
+  if (t.startsWith('Context: This summary will be shown in a list')) return true;
+  return false;
+}
+
+/**
+ * 从 JSONL 内容中提取第一条用户消息，检测是否为内部会话。
+ * @param {string} content - JSONL 文件的完整文本内容
+ * @returns {boolean} true 表示是内部会话，应被过滤
+ */
+function checkInternalContent(content) {
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.type === 'user' && obj.message && !obj.isMeta) {
+      const c = obj.message.content;
+      let text = '';
+      if (typeof c === 'string') text = c;
+      else if (Array.isArray(c)) text = c.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      return isInternalFirstPrompt(text);
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Read sidecar meta file for a session
 // ---------------------------------------------------------------------------
 function readSidecarMeta(projectDir, sessionId) {
@@ -136,6 +168,7 @@ function extractSessionMeta(filePath, sessionId, projectDir) {
     const tags = sidecar.tags || [];
     const isFavorite = sidecar.isFavorite || false;
     const isDeleted = sidecar.isDeleted || false;
+    const isInternal = isInternalFirstPrompt(firstPrompt);
 
     return {
       sessionId,
@@ -150,6 +183,7 @@ function extractSessionMeta(filePath, sessionId, projectDir) {
       tags,
       isFavorite,
       isDeleted,
+      isInternal,
     };
   } catch {
     return null;
@@ -183,13 +217,13 @@ function scanProjectSessions(projectDir) {
     try { sidecarMtime = fs.statSync(sidecarPath).mtimeMs; } catch { /* no sidecar */ }
 
     if (cached && cached.mtime === stat.mtimeMs && cached.sidecarMtime === sidecarMtime) {
-      if (cached.data && cached.data.messageCount > 0 && !cached.data.isDeleted) sessions.push(cached.data);
+      if (cached.data && cached.data.messageCount > 0 && !cached.data.isDeleted && !cached.data.isInternal) sessions.push(cached.data);
       continue;
     }
 
     const meta = extractSessionMeta(filePath, sessionId, projectDir);
     sessionCache.set(cacheKey, { mtime: stat.mtimeMs, sidecarMtime, data: meta });
-    if (meta && meta.messageCount > 0 && !meta.isDeleted) {
+    if (meta && meta.messageCount > 0 && !meta.isDeleted && !meta.isInternal) {
       sessions.push(meta);
     }
   }
@@ -1087,6 +1121,7 @@ app.get('/api/search', (req, res) => {
         // Get session display name
         const sidecar = readSidecarMeta(dirPath, sessionId);
         if (sidecar.isDeleted) continue;
+        if (checkInternalContent(content)) continue;
         let sessionName = sidecar.customName || null;
 
         for (const line of content.split('\n')) {
@@ -1263,6 +1298,7 @@ app.get('/api/stats', (req, res) => {
         const filePath = path.join(dirPath, file);
         let content;
         try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
+        if (checkInternalContent(content)) continue;
 
         let sessionHasMessages = false;
 
@@ -1625,6 +1661,7 @@ app.get('/api/timeline', (req, res) => {
         const filePath = path.join(dirPath, file);
         let content;
         try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
+        if (checkInternalContent(content)) continue;
 
         for (const line of content.split('\n')) {
           if (!line.trim()) continue;
@@ -1728,6 +1765,7 @@ app.get('/api/prompts', (req, res) => {
         const filePath = path.join(dirPath, file);
         let content;
         try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
+        if (checkInternalContent(content)) continue;
 
         // Get session display name
         const sidecar = readSidecarMeta(dirPath, sessionId);
