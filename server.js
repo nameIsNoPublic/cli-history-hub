@@ -15,6 +15,8 @@ const CODEX_INDEX_PATH = path.join(CODEX_DIR, 'session_index.jsonl');
 const GEMINI_DIR = path.join(os.homedir(), '.gemini');
 const GEMINI_TMP_DIR = path.join(GEMINI_DIR, 'tmp');
 const GEMINI_PROJECTS_PATH = path.join(GEMINI_DIR, 'projects.json');
+const OPENCODE_DB_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
+const OPENCODE_SESSION_META_DIR = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'session-meta');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -847,6 +849,255 @@ function findCodexSessionFile(sessionId) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// OpenCode SQLite database helpers
+// ---------------------------------------------------------------------------
+let opencodeDb = null;
+
+function getOpenCodeDb() {
+  if (opencodeDb) return opencodeDb;
+  if (!fs.existsSync(OPENCODE_DB_PATH)) return null;
+  try {
+    const Database = require('better-sqlite3');
+    opencodeDb = new Database(OPENCODE_DB_PATH, { readonly: true });
+    return opencodeDb;
+  } catch (err) {
+    console.error('Failed to open OpenCode database:', err.message);
+    return null;
+  }
+}
+
+function listOpenCodeProjects() {
+  const db = getOpenCodeDb();
+  if (!db) return [];
+
+  try {
+    const sessions = db.prepare(`
+      SELECT
+        s.id as session_id,
+        s.project_id,
+        s.title,
+        s.directory,
+        s.model,
+        s.tokens_input,
+        s.tokens_output,
+        s.tokens_reasoning,
+        s.tokens_cache_read,
+        s.tokens_cache_write,
+        s.cost,
+        s.time_created,
+        s.time_updated
+      FROM session s
+      WHERE s.time_archived IS NULL
+      ORDER BY s.time_updated DESC
+    `).all();
+
+    const projectMap = new Map();
+
+    for (const sess of sessions) {
+      const projectPath = sess.directory || 'unknown';
+      // Use directory-based project ID to avoid conflicts when multiple directories share the same project_id (e.g., 'global')
+      const projectId = 'opencode:' + projectPath.replace(/[/\\]/g, '-').replace(/^-/, '');
+      if (!projectMap.has(projectPath)) {
+        projectMap.set(projectPath, {
+          projectId,
+          projectPath,
+          sessions: [],
+        });
+      }
+
+      let modelInfo = null;
+      if (sess.model) {
+        try { modelInfo = JSON.parse(sess.model); } catch { /* ignore */ }
+      }
+
+      projectMap.get(projectPath).sessions.push({
+        sessionId: sess.session_id,
+        title: sess.title,
+        model: modelInfo,
+        tokensInput: sess.tokens_input || 0,
+        tokensOutput: sess.tokens_output || 0,
+        tokensReasoning: sess.tokens_reasoning || 0,
+        cost: sess.cost || 0,
+        created: new Date(sess.time_created).toISOString(),
+        modified: new Date(sess.time_updated).toISOString(),
+      });
+    }
+
+    return Array.from(projectMap.values());
+  } catch (err) {
+    console.error('Failed to list OpenCode projects:', err.message);
+    return [];
+  }
+}
+
+// OpenCode project cache
+const opencodeProjectCache = new Map();
+let opencodeProjectCacheTime = 0;
+const OPENCODE_CACHE_TTL = 30000;
+
+function getOpenCodeProjects() {
+  const now = Date.now();
+  if (now - opencodeProjectCacheTime < OPENCODE_CACHE_TTL && opencodeProjectCache.size > 0) {
+    return Array.from(opencodeProjectCache.values());
+  }
+  const projects = listOpenCodeProjects();
+  opencodeProjectCache.clear();
+  for (const p of projects) {
+    opencodeProjectCache.set(p.projectId, p);
+  }
+  opencodeProjectCacheTime = now;
+  return projects;
+}
+
+/**
+ * Check if a project ID is an OpenCode project.
+ */
+function isOpenCodeProject(pid) {
+  return pid.startsWith('opencode:');
+}
+
+/**
+ * Read OpenCode sidecar meta for a session.
+ */
+function readOpenCodeSidecarMeta(sessionId) {
+  const metaPath = path.join(OPENCODE_SESSION_META_DIR, `${sessionId}.json`);
+  try {
+    if (fs.existsSync(metaPath)) {
+      return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+/**
+ * Write OpenCode sidecar meta for a session.
+ */
+function writeOpenCodeSidecarMeta(sessionId, meta) {
+  if (!fs.existsSync(OPENCODE_SESSION_META_DIR)) {
+    fs.mkdirSync(OPENCODE_SESSION_META_DIR, { recursive: true });
+  }
+  const metaPath = path.join(OPENCODE_SESSION_META_DIR, `${sessionId}.json`);
+  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+}
+
+/**
+ * Extract session metadata for an OpenCode session (for sessions-full listing).
+ */
+function extractOpenCodeSessionMeta(projectId, sessionData) {
+  const db = getOpenCodeDb();
+  const sidecar = readOpenCodeSidecarMeta(sessionData.sessionId);
+  const modelStr = sessionData.model ? `${sessionData.model.providerID || ''}/${sessionData.model.modelID || sessionData.model.id || ''}` : null;
+
+  // Count messages from database
+  let messageCount = 0;
+  if (db) {
+    try {
+      const result = db.prepare('SELECT COUNT(*) as count FROM message WHERE session_id = ?').get(sessionData.sessionId);
+      messageCount = result ? result.count : 0;
+    } catch { /* ignore */ }
+  }
+
+  return {
+    sessionId: sessionData.sessionId,
+    firstPrompt: sessionData.title || 'No title',
+    customName: sidecar.customName || null,
+    displayName: sidecar.customName || sessionData.title || 'Untitled',
+    messageCount,
+    created: sessionData.created,
+    modified: sessionData.modified,
+    gitBranch: null,
+    projectPath: null,
+    tags: sidecar.tags || [],
+    isFavorite: sidecar.isFavorite || false,
+    isDeleted: sidecar.isDeleted || false,
+    source: 'opencode',
+    model: modelStr,
+    tokensInput: sessionData.tokensInput,
+    tokensOutput: sessionData.tokensOutput,
+    cost: sessionData.cost,
+  };
+}
+
+/**
+ * Get OpenCode session messages from database.
+ */
+function getOpenCodeSessionMessages(sessionId) {
+  const db = getOpenCodeDb();
+  if (!db) return null;
+
+  try {
+    const session = db.prepare('SELECT * FROM session WHERE id = ?').get(sessionId);
+    if (!session) return null;
+
+    const messages = db.prepare(
+      'SELECT * FROM message WHERE session_id = ? ORDER BY time_created'
+    ).all(sessionId);
+
+    const parts = db.prepare(
+      'SELECT * FROM part WHERE session_id = ? ORDER BY time_created'
+    ).all(sessionId);
+
+    // Group parts by message_id
+    const partsByMessage = new Map();
+    for (const part of parts) {
+      if (!partsByMessage.has(part.message_id)) {
+        partsByMessage.set(part.message_id, []);
+      }
+      let partData;
+      try { partData = JSON.parse(part.data); } catch { partData = {}; }
+      partsByMessage.get(part.message_id).push({
+        id: part.id,
+        ...partData,
+      });
+    }
+
+    // Build message list with parts
+    const result = messages.map(msg => {
+      let data;
+      try { data = JSON.parse(msg.data); } catch { data = {}; }
+      return {
+        id: msg.id,
+        role: data.role,
+        tokens: data.tokens,
+        modelID: data.modelID,
+        providerID: data.providerID,
+        cost: data.cost,
+        time: data.time,
+        parts: partsByMessage.get(msg.id) || [],
+      };
+    });
+
+    let modelInfo = null;
+    if (session.model) {
+      try { modelInfo = JSON.parse(session.model); } catch { /* ignore */ }
+    }
+
+    const sidecar = readOpenCodeSidecarMeta(sessionId);
+
+    return {
+      sessionId: session.id,
+      title: session.title,
+      directory: session.directory,
+      model: modelInfo,
+      tokensInput: session.tokens_input || 0,
+      tokensOutput: session.tokens_output || 0,
+      tokensReasoning: session.tokens_reasoning || 0,
+      cost: session.cost || 0,
+      created: new Date(session.time_created).toISOString(),
+      modified: new Date(session.time_updated).toISOString(),
+      customName: sidecar.customName || null,
+      tags: sidecar.tags || [],
+      isFavorite: sidecar.isFavorite || false,
+      messages: result,
+      messageCount: result.length,
+    };
+  } catch (err) {
+    console.error('Failed to get OpenCode session:', err.message);
+    return null;
+  }
+}
+
 // ===========================================================================
 // API ENDPOINTS
 // ===========================================================================
@@ -897,6 +1148,22 @@ app.get('/api/projects', (req, res) => {
       });
     }
 
+    // Merge OpenCode projects
+    const opencodeProjects = getOpenCodeProjects();
+    for (const op of opencodeProjects) {
+      const sessionCount = op.sessions.filter(s => !readOpenCodeSidecarMeta(s.sessionId).isDeleted).length;
+      if (sessionCount === 0) continue;
+
+      const displayPath = op.projectPath || 'unknown';
+      projects.push({
+        id: op.projectId,
+        name: displayPath,
+        shortName: displayPath.split(/[/\\]/).filter(Boolean).slice(-2).join('/') || op.projectId,
+        sessionCount,
+        source: 'opencode',
+      });
+    }
+
     projects.sort((a, b) => b.sessionCount - a.sessionCount);
     res.json(projects);
   } catch (err) {
@@ -921,6 +1188,24 @@ app.get('/api/projects/:pid/sessions-full', (req, res) => {
       for (const sess of cp.sessions) {
         const meta = extractCodexSessionMeta(sess.filePath, sess.sessionId, sess.displayName);
         if (meta && meta.messageCount > 0 && !meta.isDeleted) {
+          sessions.push(meta);
+        }
+      }
+      sessions.sort((a, b) => new Date(b.modified || 0) - new Date(a.modified || 0));
+      return res.json(sessions);
+    }
+
+    // Handle OpenCode projects
+    if (isOpenCodeProject(pid)) {
+      const opencodeProjects = getOpenCodeProjects();
+      const projectId = pid.replace('opencode:', '');
+      const op = opencodeProjects.find(p => p.projectId === pid);
+      if (!op) return res.json([]);
+
+      const sessions = [];
+      for (const sess of op.sessions) {
+        const meta = extractOpenCodeSessionMeta(pid, sess);
+        if (!meta.isDeleted) {
           sessions.push(meta);
         }
       }
@@ -965,6 +1250,23 @@ app.get('/api/projects/:pid/sessions/:sid', (req, res) => {
         tags: sidecar.tags || [],
         isFavorite: sidecar.isFavorite || false,
         totalMessages: rawEvents.filter(e => e.type === 'event_msg' && e.payload && (e.payload.type === 'user_message' || e.payload.type === 'agent_message')).length,
+        page: 1,
+        totalPages: 1,
+      });
+    }
+
+    // Handle OpenCode sessions
+    if (isOpenCodeProject(pid)) {
+      const data = getOpenCodeSessionMessages(sid);
+      if (!data) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      return res.json({
+        source: 'opencode',
+        ...data,
+        fileChanges: [], // OpenCode doesn't track file changes in the same way
+        totalMessages: data.messageCount,
         page: 1,
         totalPages: 1,
       });
@@ -1041,6 +1343,22 @@ app.put('/api/projects/:pid/sessions/:sid/meta', (req, res) => {
   try {
     const pid = req.params.pid;
     const sid = req.params.sid;
+
+    // Handle OpenCode sessions
+    if (isOpenCodeProject(pid)) {
+      const { customName, tags, isFavorite, isDeleted } = req.body;
+      const existing = readOpenCodeSidecarMeta(sid);
+
+      if (customName !== undefined) existing.customName = customName;
+      if (tags !== undefined) existing.tags = tags;
+      if (isFavorite !== undefined) existing.isFavorite = isFavorite;
+      if (isDeleted !== undefined) existing.isDeleted = isDeleted;
+      existing.updatedAt = new Date().toISOString();
+
+      writeOpenCodeSidecarMeta(sid, existing);
+      return res.json({ ok: true, meta: existing });
+    }
+
     let sidecarDir;
     let cacheKey;
 
@@ -1934,6 +2252,15 @@ app.post('/api/open-terminal', (req, res) => {
         }
       }
       command = `codex resume ${realSessionId}`;
+    } else if (isOpenCodeProject(projectId)) {
+      // OpenCode 项目：从数据库获取项目路径
+      const opencodeProjects = getOpenCodeProjects();
+      const op = opencodeProjects.find(p => p.projectId === projectId);
+      if (!op || !op.projectPath) {
+        return res.status(404).json({ error: 'OpenCode project not found' });
+      }
+      projectPath = op.projectPath;
+      command = `opencode -s ${sessionId}`;
     } else {
       // Claude 项目：通过 getProjectPath 获取实际项目路径
       const dirPath = path.join(PROJECTS_DIR, projectId);
@@ -1965,5 +2292,8 @@ app.listen(PORT, () => {
   console.log(`Reading data from: ${CLAUDE_DIR}`);
   if (fs.existsSync(CODEX_DIR)) {
     console.log(`Reading Codex data from: ${CODEX_DIR}`);
+  }
+  if (fs.existsSync(OPENCODE_DB_PATH)) {
+    console.log(`Reading OpenCode data from: ${OPENCODE_DB_PATH}`);
   }
 });

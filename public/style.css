@@ -275,6 +275,11 @@ body {
   box-shadow: 0 0 6px rgba(126, 231, 135, 0.4);
 }
 
+.project-group-header.opencode .project-group-dot {
+  background: #58a6ff;
+  box-shadow: 0 0 6px rgba(88, 166, 255, 0.4);
+}
+
 .project-group-count {
   margin-left: auto;
   font-size: 10px;
@@ -1178,6 +1183,12 @@ mark.chat-search-match.chat-search-active {
 
 .tool-toggle .arrow.open {
   transform: rotate(90deg);
+}
+
+.tool-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: normal;
 }
 
 .tool-content {

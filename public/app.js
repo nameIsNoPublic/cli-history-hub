@@ -255,9 +255,12 @@
     // Split by source
     var claudeProjects = [];
     var codexProjects = [];
+    var opencodeProjects = [];
     for (var i = 0; i < state.projects.length; i++) {
       if (state.projects[i].source === 'codex') {
         codexProjects.push(state.projects[i]);
+      } else if (state.projects[i].source === 'opencode') {
+        opencodeProjects.push(state.projects[i]);
       } else {
         claudeProjects.push(state.projects[i]);
       }
@@ -271,6 +274,11 @@
     // Render Codex group
     if (codexProjects.length > 0) {
       renderProjectGroup(dom.projectList, 'Codex CLI', 'codex', codexProjects);
+    }
+
+    // Render OpenCode group
+    if (opencodeProjects.length > 0) {
+      renderProjectGroup(dom.projectList, 'OpenCode', 'opencode', opencodeProjects);
     }
   }
 
@@ -689,6 +697,9 @@
         if (data.source === 'codex' && window.ChatView.renderCodex) {
           // Codex: transparent passthrough, render raw events
           window.ChatView.renderCodex(data);
+        } else if (data.source === 'opencode' && window.ChatView.renderOpenCode) {
+          // OpenCode: render from database messages
+          window.ChatView.renderOpenCode(data);
         } else if (window.ChatView.render) {
           window.ChatView.render(state.currentMessages, {
             page: data.page,

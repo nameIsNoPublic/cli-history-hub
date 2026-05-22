@@ -17,9 +17,10 @@
 |--------|---------|------|
 | Claude Code | `~/.claude/projects/` | ✅ 已支持 |
 | OpenAI Codex CLI | `~/.codex/sessions/` | ✅ 已支持 |
+| OpenCode CLI | `~/.local/share/opencode/opencode.db` | ✅ 已支持 |
 | Cursor / Aider / 其他 | — | 🔮 可扩展 |
 
-- 侧边栏按数据源分组（🟣 Claude Code / 🟢 Codex CLI），支持折叠收起
+- 侧边栏按数据源分组（🟣 Claude Code / 🟢 Codex CLI / 🔵 OpenCode），支持折叠收起
 - 各数据源独立渲染，保留原始格式，不做数据转换
 - 缺失的数据源静默跳过，不影响其他功能
 
@@ -166,7 +167,7 @@ node server.js
 | `cli-history-hub` | 前台启动（Ctrl+C 停止） |
 | `cli-history-hub --port 8080` | 指定端口 |
 
-> 确保 `~/.claude/projects/` 或 `~/.codex/sessions/` 中有会话数据。如果两个目录都不存在，页面将显示空列表。
+> 确保 `~/.claude/projects/`、`~/.codex/sessions/` 或 `~/.local/share/opencode/opencode.db` 中有会话数据。如果所有数据源都不存在，页面将显示空列表。
 
 ## 技术栈
 
@@ -176,15 +177,15 @@ node server.js
 | 前端 | 原生 JavaScript + [marked.js](https://github.com/markedjs/marked)（Markdown 渲染） |
 | 图表 | Canvas 2D API（自绘柱状图 + 甜甜圈图） |
 | Diff | LCS（最长公共子序列）算法，纯前端实现 |
-| 数据 | 文件系统（JSONL + JSON sidecar，无数据库，双数据源） |
+| 数据 | 文件系统（JSONL + JSON sidecar）+ SQLite（OpenCode） |
 | 样式 | 原生 CSS，CSS 变量驱动的暗色/浅色双主题 |
 
 ## 项目结构
 
 ```
 cli-history-hub/
-  server.js                 # 后端：Express 服务器 + 10 个 API + 双数据源解析
-  package.json              # 项目配置（唯一依赖：express）
+  server.js                 # 后端：Express 服务器 + 10 个 API + 三数据源解析
+  package.json              # 项目配置（express + better-sqlite3）
   LICENSE                   # CC BY-NC-SA 4.0
   public/
     index.html              # SPA 入口（6 视图 + 6 弹窗）
@@ -220,9 +221,11 @@ cli-history-hub/
 用户在 Hub 中添加的元数据（重命名、标签、收藏）存储在独立的 sidecar 文件中：
 ```
 ~/.claude/projects/{project-dir}/session-meta/{session-id}.json
+~/.codex/sessions/session-meta/{session-id}.json
+~/.local/share/opencode/storage/session-meta/{session-id}.json
 ```
 
-> 如果 `~/.codex` 目录不存在，Codex 相关功能静默跳过。未来接入新的 CLI 工具只需新增数据源适配层，无需修改现有代码。
+> 如果某个数据源目录不存在，对应功能静默跳过。未来接入新的 CLI 工具只需新增数据源适配层，无需修改现有代码。
 
 ## API
 
@@ -232,9 +235,9 @@ cli-history-hub/
 |------|------|------|
 | GET | `/api/projects` | 项目列表（含数据源标识） |
 | GET | `/api/projects/:pid/sessions-full` | 会话元数据列表 |
-| GET | `/api/projects/:pid/sessions/:sid` | 会话消息（Claude 格式 / Codex 透传） |
+| GET | `/api/projects/:pid/sessions/:sid` | 会话消息（Claude 格式 / Codex 透传 / OpenCode 透传） |
 | PUT | `/api/projects/:pid/sessions/:sid/meta` | 更新会话元数据 |
-| GET | `/api/search` | 全文搜索（跨双数据源） |
+| GET | `/api/search` | 全文搜索（跨三数据源） |
 | GET | `/api/stats` | Token 用量统计 |
 | GET | `/api/tags` | 标签列表 |
 | GET | `/api/timeline` | 时间线热力图数据 |
@@ -257,6 +260,7 @@ cli-history-hub/
 - [时间线热力图](docs/timeline.md) — GitHub 风格活跃度日历
 - [深色/浅色主题](docs/theme.md) — CSS 变量方案、持久化
 - [Codex CLI 集成](docs/codex-integration.md) — Codex 数据源接入、透传适配
+- [OpenCode CLI 集成](docs/opencode-integration.md) — OpenCode 数据源接入、SQLite 数据库
 - [数据存储](docs/data-storage.md) — JSONL 解析、sidecar、缓存
 - [API 参考](docs/api-reference.md) — 10 个接口完整文档
 

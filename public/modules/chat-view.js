@@ -236,6 +236,109 @@ window.ChatView = (function () {
   }
 
   /**
+   * Render OpenCode messages from database.
+   * @param {object} data - { source, messages, model, ... }
+   */
+  function renderOpenCode(data) {
+    var messages = data.messages || [];
+    messagesContainer.innerHTML = '';
+    _messages = [];
+
+    messages.forEach(function (msg) {
+      var isUser = msg.role === 'user';
+      var timeStr = msg.time && msg.time.created ? formatTime(new Date(msg.time.created).toISOString()) : '';
+      var modelStr = '';
+      if (msg.modelID) {
+        modelStr = msg.modelID;
+      } else if (data.model) {
+        modelStr = data.model.modelID || data.model.id || '';
+      }
+
+      var div = document.createElement('div');
+      div.className = 'message-turn';
+      div.dataset.role = msg.role;
+
+      var headerHtml = '<div class="turn-header">';
+      if (isUser) {
+        headerHtml += '<span class="message-role user">User</span>';
+      } else {
+        headerHtml += '<span class="message-role assistant">' + escapeHtml(modelStr || 'assistant') + '</span>';
+      }
+      headerHtml += '<span class="message-time">' + escapeHtml(timeStr) + '</span>';
+
+      // Add token info for assistant messages
+      if (!isUser && msg.tokens) {
+        var tokenStr = formatNumber(msg.tokens.output || 0) + ' tokens';
+        if (msg.tokens.reasoning) {
+          tokenStr += ' (' + formatNumber(msg.tokens.reasoning) + ' reasoning)';
+        }
+        headerHtml += '<span class="token-info">' + escapeHtml(tokenStr) + '</span>';
+      }
+
+      if (isUser) {
+        headerHtml += '<button class="btn-copy-msg" title="Copy">' +
+          '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>' +
+          '</button>';
+      }
+      headerHtml += '</div>';
+
+      // Render parts
+      var bodyHtml = '<div class="turn-body ' + (isUser ? 'user-body' : 'assistant-body') + '">';
+      var userTextForCopy = '';
+
+      (msg.parts || []).forEach(function (part) {
+        if (part.type === 'text' && part.text) {
+          bodyHtml += renderMarkdown(part.text);
+          if (isUser) userTextForCopy += part.text;
+        } else if (part.type === 'reasoning' && part.text) {
+          var preview = part.text.substring(0, 100).replace(/\n/g, ' ');
+          bodyHtml += '<div class="thinking-block">' +
+            '<div class="thinking-toggle">' +
+              '<span class="arrow">&#9654;</span>' +
+              '<span>Reasoning: ' + escapeHtml(preview) + (part.text.length > 100 ? '...' : '') + '</span>' +
+            '</div>' +
+            '<div class="thinking-content">' + escapeHtml(part.text) + '</div>' +
+          '</div>';
+        } else if (part.type === 'tool' && part.tool) {
+          var toolInput = part.state && part.state.input ? JSON.stringify(part.state.input, null, 2) : '';
+          var toolStatus = part.state && part.state.status ? part.state.status : '';
+          bodyHtml += '<div class="tool-block">' +
+            '<div class="tool-toggle">' +
+              '<span class="arrow">&#9654;</span>' +
+              '<span>Tool: ' + escapeHtml(part.tool) +
+                (toolStatus ? ' <span class="tool-status">(' + escapeHtml(toolStatus) + ')</span>' : '') +
+              '</span>' +
+            '</div>' +
+            '<div class="tool-content"><pre>' + escapeHtml(toolInput) + '</pre></div>' +
+          '</div>';
+        }
+      });
+
+      bodyHtml += '</div>';
+      div.innerHTML = headerHtml + bodyHtml;
+
+      // Bind copy button
+      if (isUser && userTextForCopy) {
+        var copyBtn = div.querySelector('.btn-copy-msg');
+        if (copyBtn) {
+          (function (t) {
+            copyBtn.addEventListener('click', function () { copyToClipboard(t); });
+          })(userTextForCopy);
+        }
+      }
+
+      messagesContainer.appendChild(div);
+    });
+
+    bindToggleEvents(messagesContainer);
+
+    if (chatMessages) {
+      chatMessages.scrollTop = 0;
+      updateScrollButtons();
+    }
+  }
+
+  /**
    * Render messages into the chat view (Claude Code format).
    * @param {Array} messages - array of user/assistant message objects
    * @param {object} opts - { page, totalPages, totalMessages }
@@ -840,6 +943,7 @@ window.ChatView = (function () {
     init: init,
     render: render,
     renderCodex: renderCodex,
+    renderOpenCode: renderOpenCode,
     loadMore: loadMore,
     getMessagesForExport: getMessagesForExport,
     openSearch: openSearch,

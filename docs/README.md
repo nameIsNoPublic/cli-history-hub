@@ -45,6 +45,7 @@ node server.js
 ### 多数据源
 
 - [Codex CLI 集成](codex-integration.md) - OpenAI Codex CLI 对话历史接入、数据格式转换、双源合并
+- [OpenCode CLI 集成](opencode-integration.md) - OpenCode CLI 对话历史接入、SQLite 数据库读取、三源合并
 
 ### 界面定制
 
@@ -63,7 +64,7 @@ node server.js
 | 后端 | Node.js + Express 4.x |
 | 前端 | 原生 JavaScript + marked.js (Markdown 渲染) |
 | 图表 | Canvas 2D API（自绘柱状图） |
-| 数据 | 文件系统（JSONL + JSON sidecar，无数据库） |
+| 数据 | 文件系统（JSONL + JSON sidecar）+ SQLite（OpenCode） |
 | 样式 | 原生 CSS，暗色主题 |
 
 ## 项目结构
@@ -98,6 +99,7 @@ claude-history-viewer/
     diff-viewer.md                # 文件变更 Diff 视图
     prompts.md                    # Prompt Library
     codex-integration.md          # Codex CLI 集成
+    opencode-integration.md       # OpenCode CLI 集成
     theme.md                      # 深色/浅色主题
     data-storage.md               # 数据存储
     api-reference.md              # API 接口参考
