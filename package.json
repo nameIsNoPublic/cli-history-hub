@@ -1,7 +1,7 @@
 {
   "name": "cli-history-hub",
   "version": "1.4.1",
-  "description": "Browse and manage conversation history from Claude Code CLI and OpenAI Codex CLI",
+  "description": "Browse and manage conversation history from Claude Code, Codex CLI, and OpenCode",
   "main": "server.js",
   "bin": {
     "cli-history-hub": "./bin/cli.js"
@@ -25,6 +25,7 @@
   "keywords": [
     "claude-code",
     "codex",
+    "opencode",
     "openai",
     "anthropic",
     "ai",
